@@ -51,13 +51,24 @@ This project enables running Linux applications (Python, Node.js, Go, Rust, C/C+
 ## Prerequisites
 
 - Linux with KVM support (`/dev/kvm` with read/write access)
-- [kraft](https://unikraft.org/docs/getting-started) CLI tool (built from [danbugs/kraftkit](https://github.com/danbugs/kraftkit) hyperlight-platform branch)
 - Docker (for building application rootfs)
 - Rust toolchain (for building the host)
 
-## Quick Start
+## Setup
 
-### 1. Build the Host
+### 1. Build Kraft with Hyperlight Support
+
+The examples use `kraft-hyperlight` to build Unikraft kernels:
+
+```bash
+git clone https://github.com/danbugs/kraftkit.git
+cd kraftkit
+git checkout hyperlight-platform
+go build -o kraft-hyperlight ./cmd/kraft
+sudo mv kraft-hyperlight /usr/local/bin/
+```
+
+### 2. Build the Host
 
 ```bash
 cd host
@@ -65,7 +76,7 @@ cargo build --release
 sudo cp target/release/hyperlight-unikraft /usr/local/bin/
 ```
 
-### 2. Run an Example
+### 3. Run an Example
 
 Each example has a Makefile that handles building and running:
 
@@ -157,18 +168,6 @@ This project requires the following forked repositories with Hyperlight platform
 
 The `kraft.yaml` files in the examples already reference the Unikraft and app-elfloader forks.
 The host's `Cargo.toml` references the Hyperlight fork.
-
-## Building Kraft with Hyperlight Support
-
-To build kraft with Hyperlight support:
-
-```bash
-git clone https://github.com/danbugs/kraftkit.git
-cd kraftkit
-git checkout hyperlight-platform
-go build -o kraft ./cmd/kraft
-sudo mv kraft /usr/local/bin/
-```
 
 ## License
 
