@@ -150,11 +150,13 @@ This project requires the following forked repositories with Hyperlight platform
 
 | Repository | Branch | Description |
 |------------|--------|-------------|
+| [danbugs/hyperlight](https://github.com/danbugs/hyperlight) | `hyperlight-platform` | Hyperlight with hw-interrupts feature |
 | [danbugs/unikraft](https://github.com/danbugs/unikraft) | `hyperlight-platform` | Unikraft with Hyperlight platform |
 | [danbugs/app-elfloader](https://github.com/danbugs/app-elfloader) | `hyperlight-platform` | ELF loader with PAGE_ALIGN fixes |
 | [danbugs/kraftkit](https://github.com/danbugs/kraftkit) | `hyperlight-platform` | Kraft with Hyperlight machine driver |
 
-The `kraft.yaml` files in the examples already reference these forks.
+The `kraft.yaml` files in the examples already reference the Unikraft and app-elfloader forks.
+The host's `Cargo.toml` references the Hyperlight fork.
 
 ## Building Kraft with Hyperlight Support
 
