@@ -1,0 +1,17 @@
+# Build artifacts
+target/
+.unikraft/
+
+# Initrd files (generated)
+*.cpio
+rootfs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

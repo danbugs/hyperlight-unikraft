@@ -1,0 +1,75 @@
+# Node.js on Hyperlight - kraft configuration
+specification: '0.6'
+name: nodejs-hyperlight
+
+unikraft:
+  source: /home/danbugs/repos/unikraft
+  kconfig:
+    # Platform
+    CONFIG_PLAT_HYPERLIGHT: 'y'
+    CONFIG_LIBUKINTCTLR_HYPERLIGHT: 'y'
+    CONFIG_HYPERLIGHT_MAX_GUEST_LOG_LEVEL: 5
+
+    # Debug output
+    CONFIG_LIBUKDEBUG: 'y'
+    CONFIG_LIBUKDEBUG_PRINTK: 'y'
+    CONFIG_LIBUKDEBUG_PRINTK_CRIT: 'y'
+    CONFIG_LIBUKDEBUG_PRINTK_ERR: 'y'
+    CONFIG_LIBUKDEBUG_PRINTK_WARN: 'y'
+    CONFIG_LIBUKDEBUG_PRINTK_INFO: 'y'
+    CONFIG_LIBUKPRINT_KLVL_INFO: 'y'
+
+    # Size optimization
+    CONFIG_OPTIMIZE_SIZE: 'y'
+
+    # VFS and initrd support
+    CONFIG_LIBVFSCORE: 'y'
+    CONFIG_LIBVFSCORE_AUTOMOUNT_CI: 'y'
+    CONFIG_LIBVFSCORE_AUTOMOUNT_CI_INITRD: 'y'
+    CONFIG_LIBRAMFS: 'y'
+    CONFIG_LIBUKCPIO: 'y'
+
+    # ELF loader - execute Node binary, script passed via cmdline
+    CONFIG_APPELFLOADER: 'y'
+    CONFIG_APPELFLOADER_VFSEXEC: 'y'
+    CONFIG_APPELFLOADER_CUSTOMAPPNAME: 'n'
+    CONFIG_APPELFLOADER_VFSEXEC_ENVPATH: 'n'
+    CONFIG_APPELFLOADER_VFSEXEC_PATH: '/usr/bin/node'
+    CONFIG_APPELFLOADER_VFSEXEC_EXECBIT_CHECK: 'n'
+    CONFIG_LIBPOSIX_ENVIRON_ENVP0: '"PATH=/usr/bin:/bin"'
+    CONFIG_LIBELF: 'y'
+
+    # Random number support
+    CONFIG_LIBUKRANDOM_CMDLINE_SEED: 'y'
+    CONFIG_LIBUKRANDOM_GETRANDOM: 'y'
+
+    # Threading support (required for Node.js runtime)
+    CONFIG_LIBUKBOOT_MAINTHREAD: 'y'
+    CONFIG_LIBPOSIX_PROCESS_ARCH_PRCTL: 'y'
+    CONFIG_LIBPOSIX_PROCESS_MULTITHREADING: 'y'
+    CONFIG_LIBPOSIX_PROCESS_SIGNAL: 'y'
+    CONFIG_LIBPOSIX_FUTEX: 'y'
+    CONFIG_LIBUKSCHED: 'y'
+    CONFIG_LIBUKSCHEDCOOP: 'y'
+    CONFIG_LIBUKMPI: 'y'
+    CONFIG_LIBUKLOCK: 'y'
+    CONFIG_LIBUKLOCK_SEMAPHORE: 'y'
+    CONFIG_LIBUKLOCK_MUTEX: 'y'
+
+    # Event/polling support (required for libuv/Node.js)
+    CONFIG_LIBPOSIX_POLL: 'y'
+    CONFIG_LIBPOSIX_EVENTFD: 'y'
+    CONFIG_LIBPOSIX_FDIO: 'y'
+    CONFIG_LIBPOSIX_FDTAB: 'y'
+    CONFIG_LIBUKFILE: 'y'
+
+libraries:
+  app-elfloader:
+    source: /home/danbugs/repos/app-elfloader
+  libelf:
+    source: https://github.com/unikraft/lib-libelf.git
+    version: staging
+
+targets:
+  - architecture: x86_64
+    platform: hyperlight
