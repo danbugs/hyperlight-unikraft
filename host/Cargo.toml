@@ -10,7 +10,7 @@ name = "hyperlight-unikraft"
 path = "src/main.rs"
 
 [dependencies]
-# Use local patched Hyperlight (has init-paging fixes and hw-interrupts)
-hyperlight-host = { path = "../../hyperlight-project/hyperlight/src/hyperlight_host", features = ["init-paging", "hw-interrupts", "executable_heap"] }
+# Use patched Hyperlight with init-paging and hw-interrupts
+hyperlight-host = { git = "https://github.com/danbugs/hyperlight.git", branch = "hyperlight-platform", features = ["init-paging", "hw-interrupts", "executable_heap"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
