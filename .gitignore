@@ -1,6 +1,14 @@
 # Build artifacts
 target/
 .unikraft/
+.config.*
+
+# Compiled binaries (in examples)
+examples/helloworld-c/hello
+examples/rust/hello
+examples/go/hello
+examples/nodejs/node
+examples/python/python
 
 # Initrd files (generated)
 *.cpio
