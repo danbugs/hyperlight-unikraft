@@ -1,38 +1,58 @@
 # hyperlight-unikraft
 
-Run Unikraft unikernels on [Hyperlight](https://github.com/hyperlight-dev/hyperlight), a lightweight Virtual Machine Manager (VMM) designed for embedded use within applications.
+Run [Unikraft](https://unikraft.org/) unikernels on [Hyperlight](https://github.com/hyperlight-dev/hyperlight), a lightweight Virtual Machine Manager (VMM) designed for embedded use within applications.
 
 ## Overview
 
-This project provides:
+This project enables running Linux applications (Python, Node.js, Go, Rust, C/C++) on Hyperlight micro-VMs using Unikraft as the guest kernel. It provides:
 
-1. **An embedded Hyperlight host** (`hyperlight-unikraft`) - A CLI tool that runs Unikraft kernels on Hyperlight
-2. **Kraft configurations** - Ready-to-use configurations for building various applications (Python, Node.js, Go, Rust, C/C++)
+1. **hyperlight-unikraft** - A CLI host that loads and runs Unikraft kernels on Hyperlight
+2. **Example configurations** - Ready-to-use kraft configs for building various applications
 
-## How It Works
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Your Application (Rust, Python, Node.js, etc) │
-├─────────────────────────────────────────────────┤
-│  hyperlight-unikraft (embedded VMM)             │
-├─────────────────────────────────────────────────┤
-│  Hyperlight (hypervisor interface)              │
-├─────────────────────────────────────────────────┤
-│  KVM / MSHV                                     │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Your Application (Python, Node.js, Go, Rust, C/C++)         │
+│  (runs as ELF binary inside the VM)                          │
+├──────────────────────────────────────────────────────────────┤
+│  Unikraft Kernel (ELF loader + VFS + POSIX)                  │
+│  - Mounts initrd as ramfs                                    │
+│  - Loads and executes application ELF                        │
+├──────────────────────────────────────────────────────────────┤
+│  hyperlight-unikraft (embedded Hyperlight host)              │
+│  - Loads kernel ELF + initrd                                 │
+│  - Passes arguments via magic header in initrd               │
+├──────────────────────────────────────────────────────────────┤
+│  Hyperlight VMM (hypervisor interface)                       │
+│  - Creates micro-VM with identity-mapped page tables         │
+│  - Provides PEB structure with memory regions                │
+├──────────────────────────────────────────────────────────────┤
+│  KVM (Linux) / MSHV (Windows)                                │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-The Unikraft kernel with the ELF loader acts as a bootloader that:
-1. Extracts the CPIO initrd to a RAM filesystem
-2. Loads the application ELF binary (Python, Node.js, etc.)
-3. Executes it in the Hyperlight micro-VM
+### How It Works
+
+1. **Host loads kernel and initrd**: `hyperlight-unikraft` reads the Unikraft kernel ELF and optional initrd (CPIO archive)
+2. **Arguments embedded in initrd**: Application arguments are prepended to the initrd with a magic header (`HLCMDLN\0`)
+3. **VM starts**: Hyperlight creates a micro-VM with identity-mapped memory and jumps to the kernel entry point
+4. **Kernel extracts initrd**: Unikraft mounts the initrd as a RAM filesystem, extracts the embedded cmdline
+5. **Application runs**: The ELF loader loads and executes the application binary (e.g., `/usr/bin/python3`)
+6. **Output via console**: Application output goes through `outb` to port 0xE9, which Hyperlight captures
+
+### Key Features
+
+- **No host function calls** - The Unikraft kernel runs entirely within the VM
+- **Identity-mapped memory** - Simplified memory layout (vaddr == paddr)
+- **Generic cmdline mechanism** - Pass arguments to any application via `-- arg1 arg2 ...`
+- **Fast cold start** - Hyperlight's lightweight design enables millisecond startup times
 
 ## Prerequisites
 
 - Linux with KVM support (`/dev/kvm` with read/write access)
-- [kraft](https://unikraft.org/docs/getting-started) CLI tool
-- Docker (for extracting application rootfs)
+- [kraft](https://unikraft.org/docs/getting-started) CLI tool (built from [danbugs/kraftkit](https://github.com/danbugs/kraftkit) hyperlight-platform branch)
+- Docker (for building application rootfs)
 - Rust toolchain (for building the host)
 
 ## Quick Start
@@ -45,80 +65,63 @@ cargo build --release
 sudo cp target/release/hyperlight-unikraft /usr/local/bin/
 ```
 
-### 2. Build a Unikraft Kernel (Python example)
+### 2. Run an Example
+
+Each example has a Makefile that handles building and running:
 
 ```bash
+# C example (fastest to build)
+cd examples/helloworld-c
+make all
+
+# Python example
 cd examples/python
-kraft build --plat hyperlight --arch x86_64
+make all
+
+# Go example
+cd examples/go
+make all
 ```
 
-### 3. Get the Application Rootfs
-
-```bash
-# Extract Python rootfs from Docker image
-docker run --rm unikraft.org/python:3.12 --rootfs python-initrd.cpio
-```
-
-### 4. Run
-
-```bash
-hyperlight-unikraft .unikraft/build/python-hyperlight_hyperlight-x86_64 \
-  --initrd python-initrd.cpio \
-  --memory 256Mi
-```
+The `make all` command will:
+1. Build the Unikraft kernel with kraft
+2. Build the application rootfs (compile binary or extract from Docker)
+3. Run the application on Hyperlight
 
 ## Examples
 
-### Python
+| Example | Binary | Notes |
+|---------|--------|-------|
+| `helloworld-c` | Static PIE C binary | Compiled with `musl-gcc` |
+| `rust` | Static PIE Rust binary | Compiled with `rustc --target x86_64-unknown-linux-musl` |
+| `python` | CPython 3.12 | Rootfs from Docker, script passed via cmdline |
+| `go` | Static PIE Go binary | Compiled with musl via Docker for CGO support |
+| `nodejs` | Node.js 21 | Rootfs from Alpine, script passed via cmdline |
+
+### Running with Arguments
+
+For interpreted languages, pass the script path after `--`:
 
 ```bash
-cd examples/python
-kraft build --plat hyperlight --arch x86_64
-docker run --rm unikraft.org/python:3.12 --rootfs python-initrd.cpio
+# Python
+hyperlight-unikraft kernel --initrd python.cpio --memory 256Mi -- /script.py arg1 arg2
 
-hyperlight-unikraft .unikraft/build/python-hyperlight_hyperlight-x86_64 \
-  --initrd python-initrd.cpio --memory 256Mi
-```
-
-### Node.js
-
-```bash
-cd examples/nodejs
-kraft build --plat hyperlight --arch x86_64
-docker run --rm unikraft.org/node:21 --rootfs node-initrd.cpio
-
-hyperlight-unikraft .unikraft/build/nodejs-hyperlight_hyperlight-x86_64 \
-  --initrd node-initrd.cpio --memory 512Mi
-```
-
-### Custom Hello World (C)
-
-For a simple C program without the full Docker rootfs:
-
-```bash
-cd examples/helloworld-c
-kraft build --plat hyperlight --arch x86_64
-
-# Create minimal initrd with just your binary
-mkdir -p rootfs/bin
-cp my-hello /rootfs/bin/hello
-cd rootfs && find . | cpio -o -H newc > ../hello-initrd.cpio
-
-hyperlight-unikraft .unikraft/build/helloworld-hyperlight_hyperlight-x86_64 \
-  --initrd hello-initrd.cpio --memory 64Mi
+# Node.js
+hyperlight-unikraft kernel --initrd node.cpio --memory 512Mi -- /app/server.js --port 8080
 ```
 
 ## CLI Options
 
 ```
-hyperlight-unikraft [OPTIONS] <KERNEL>
+hyperlight-unikraft [OPTIONS] <KERNEL> [-- <APP_ARGS>...]
 
 Arguments:
-  <KERNEL>  Path to the Unikraft kernel binary
+  <KERNEL>       Path to the Unikraft kernel binary
+  <APP_ARGS>...  Arguments passed to the application (after --)
 
 Options:
-  -m, --memory <MEMORY>  Memory allocation (e.g., 256Mi, 512Mi, 1Gi) [default: 512Mi]
-      --stack <STACK>    Stack size (e.g., 8Mi) [default: 8Mi]
+  -m, --memory <MEMORY>  Memory allocation [default: 512Mi]
+      --stack <STACK>    Stack size [default: 8Mi]
       --initrd <CPIO>    Path to initrd/rootfs CPIO archive
   -q, --quiet            Suppress kernel output
   -h, --help             Print help
@@ -129,26 +132,41 @@ Options:
 
 ```
 hyperlight-unikraft/
-├── host/                    # Embedded Hyperlight host
+├── host/                    # Rust CLI host
 │   ├── Cargo.toml
 │   └── src/main.rs
 ├── examples/
-│   ├── python/             # Python kraft config
-│   ├── nodejs/             # Node.js kraft config
-│   ├── go/                 # Go kraft config
-│   ├── rust/               # Rust kraft config
-│   └── helloworld-c/       # Simple C example
+│   ├── helloworld-c/       # C example (musl-gcc)
+│   ├── rust/               # Rust example (musl)
+│   ├── python/             # Python 3.12 example
+│   ├── go/                 # Go example (Docker + musl)
+│   └── nodejs/             # Node.js 21 example
 └── README.md
 ```
 
 ## Dependencies
 
-This project requires patches to:
+This project requires the following forked repositories with Hyperlight platform support:
 
-1. **Unikraft** - Hyperlight platform support
-2. **Hyperlight** - `init-paging` and `hw-interrupts` features enabled
+| Repository | Branch | Description |
+|------------|--------|-------------|
+| [danbugs/unikraft](https://github.com/danbugs/unikraft) | `hyperlight-platform` | Unikraft with Hyperlight platform |
+| [danbugs/app-elfloader](https://github.com/danbugs/app-elfloader) | `hyperlight-platform` | ELF loader with PAGE_ALIGN fixes |
+| [danbugs/kraftkit](https://github.com/danbugs/kraftkit) | `hyperlight-platform` | Kraft with Hyperlight machine driver |
 
-See the patches directory for the required changes.
+The `kraft.yaml` files in the examples already reference these forks.
+
+## Building Kraft with Hyperlight Support
+
+To build kraft with Hyperlight support:
+
+```bash
+git clone https://github.com/danbugs/kraftkit.git
+cd kraftkit
+git checkout hyperlight-platform
+go build -o kraft ./cmd/kraft
+sudo mv kraft /usr/local/bin/
+```
 
 ## License
 
