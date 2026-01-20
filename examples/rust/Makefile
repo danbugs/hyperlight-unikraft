@@ -3,20 +3,18 @@ KERNEL := .unikraft/build/rust-hyperlight_hyperlight-x86_64
 INITRD := hello-initrd.cpio
 MEMORY := 32Mi
 
-.PHONY: build rootfs run run-only benchmark clean
+.PHONY: all build rootfs run run-only benchmark clean
+
+all: build rootfs run-only
 
 build:
-	@echo "=== Building Unikraft kernel ==="
 	yes | kraft-hyperlight build --plat hyperlight --arch x86_64
 
 rootfs: hello.rs
-	@echo "=== Compiling Rust binary (static PIE with musl) ==="
 	rustc --target x86_64-unknown-linux-musl -C target-feature=+crt-static -C relocation-model=pie -o hello hello.rs
-	@echo "=== Creating initrd.cpio ==="
 	mkdir -p rootfs/bin
 	cp hello rootfs/bin/
 	cd rootfs && find . | cpio -o -H newc > ../$(INITRD)
-	@echo "Created $(INITRD)"
 
 run-only:
 	@hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY)

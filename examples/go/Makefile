@@ -12,24 +12,21 @@ MEMORY := 64Mi
 IMAGE_NAME := go-hyperlight-builder
 CONTAINER_NAME := $(IMAGE_NAME)
 
-.PHONY: build rootfs run run-only benchmark clean
+.PHONY: all build rootfs run run-only benchmark clean
+
+all: build rootfs run-only
 
 build:
-	@echo "=== Building Unikraft kernel ==="
 	yes | kraft-hyperlight build --plat hyperlight --arch x86_64
 
 rootfs: Dockerfile hello.go
-	@echo "=== Building Go binary via Docker (static PIE) ==="
 	docker build --platform linux/amd64 -t $(IMAGE_NAME) .
-	@echo "=== Extracting rootfs ==="
 	-docker rm -f $(CONTAINER_NAME) 2>/dev/null
 	docker create --name $(CONTAINER_NAME) $(IMAGE_NAME) /bin/true
 	rm -rf rootfs && mkdir -p rootfs
 	docker export $(CONTAINER_NAME) | tar -x -C rootfs
 	docker rm -f $(CONTAINER_NAME)
-	@echo "=== Creating initrd.cpio ==="
 	cd rootfs && find . | cpio -o -H newc > ../$(INITRD)
-	@echo "Created $(INITRD)"
 	rm -rf rootfs
 
 run-only:

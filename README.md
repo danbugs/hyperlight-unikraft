@@ -50,9 +50,13 @@ This project enables running Linux applications (Python, Node.js, Go, Rust, C/C+
 
 ## Prerequisites
 
-- Linux with KVM support (`/dev/kvm` with read/write access)
+- **Linux with KVM support** (`/dev/kvm` with read/write access)
+  - Note: Currently only KVM is supported (not MSHV) due to the `hw-interrupts` feature requirement
+- Go 1.25+ (for building kraft-hyperlight)
 - Docker (for building application rootfs)
-- Rust toolchain (for building the host)
+- Rust 1.89+ toolchain (for building the host)
+- `cpio` utility (`sudo apt install cpio`)
+- `musl-gcc` for C examples (`sudo apt install musl-tools`)
 
 ## Setup
 
@@ -168,7 +172,3 @@ This project requires the following forked repositories with Hyperlight platform
 
 The `kraft.yaml` files in the examples already reference the Unikraft and app-elfloader forks.
 The host's `Cargo.toml` references the Hyperlight fork.
-
-## License
-
-MIT OR Apache-2.0
