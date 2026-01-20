@@ -17,14 +17,11 @@ all: build rootfs run-only
 
 # Build the Unikraft kernel with kraft
 build:
-	@echo "=== Building Unikraft kernel ==="
 	yes | kraft-hyperlight build --plat hyperlight --arch x86_64
 
 # Compile C binary as static PIE and create initrd
 rootfs: hello.c
-	@echo "=== Compiling C binary (static PIE) ==="
 	musl-gcc -static-pie -fPIE -o hello hello.c
-	@echo "=== Creating initrd.cpio ==="
 	mkdir -p rootfs/bin
 	cp hello rootfs/bin/
 	cd rootfs && find . | cpio -o -H newc > ../$(INITRD)
@@ -35,7 +32,6 @@ run: build rootfs run-only
 
 # Run without rebuilding
 run-only:
-	@echo "=== Running Hello C on Hyperlight ==="
 	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY)
 
 # Performance benchmark

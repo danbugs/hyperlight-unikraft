@@ -4,22 +4,20 @@ INITRD := node-initrd.cpio
 MEMORY := 512Mi
 SCRIPT ?= /app/hello.js
 
-.PHONY: build rootfs run run-only benchmark clean
+.PHONY: all build rootfs run run-only benchmark clean
+
+all: build rootfs run-only
 
 build:
-	@echo "=== Building Unikraft kernel ==="
 	yes | kraft-hyperlight build --plat hyperlight --arch x86_64
 
 rootfs: Dockerfile hello.js
-	@echo "=== Building Node.js rootfs via Docker ==="
-	docker build -t nodejs-hyperlight-rootfs .
+	docker build --platform linux/amd64 -t nodejs-hyperlight-rootfs .
 	docker create --name nodejs-tmp nodejs-hyperlight-rootfs /bin/true || true
 	mkdir -p rootfs
 	docker export nodejs-tmp | tar -C rootfs -xf -
 	docker rm nodejs-tmp
-	@echo "=== Creating initrd.cpio ==="
 	cd rootfs && find . | cpio -o -H newc > ../$(INITRD)
-	@echo "Created $(INITRD)"
 
 run-only:
 	@hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) -- $(SCRIPT)
