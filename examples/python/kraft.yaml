@@ -38,6 +38,7 @@ unikraft:
     CONFIG_APPELFLOADER_VFSEXEC_PATH: '/usr/local/bin/python3'
     CONFIG_APPELFLOADER_VFSEXEC_EXECBIT_CHECK: 'n'
     CONFIG_LIBPOSIX_ENVIRON_ENVP0: '"PATH=/usr/local/bin:/usr/bin:/bin"'
+    CONFIG_LIBPOSIX_ENVIRON_ENVP1: '"LD_LIBRARY_PATH=/usr/local/lib"'
     CONFIG_LIBELF: 'y'
 
     # Random number support (required for Python)

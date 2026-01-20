@@ -1,61 +1,68 @@
-# Hello World C on Hyperlight - Makefile
+# Hello World C on Hyperlight - Build and Run
 #
 # Usage:
-#   make build    - Build the Unikraft kernel
-#   make rootfs   - Compile C binary and create initrd.cpio
-#   make run      - Build everything and run
-#   make benchmark - Run performance benchmark
-#   make clean    - Clean build artifacts
+#   make rootfs      - Build C binary and create initrd.cpio
+#   make build       - Build Unikraft kernel with kraft
+#   make run         - Build everything and run
+#   make benchmark   - Benchmark cold start time
+#   make all         - Build everything and run
+#   make clean       - Clean up
 
-KERNEL := .unikraft/build/helloworld-hyperlight_hyperlight-x86_64
-INITRD := hello-initrd.cpio
-MEMORY := 32Mi
+KERNEL = .unikraft/build/helloworld-hyperlight_hyperlight-x86_64
+INITRD = hello-initrd.cpio
+MEMORY ?= 32Mi
+BENCHMARK_RUNS ?= 10
 
 .PHONY: all build rootfs run run-only benchmark clean
 
-all: build rootfs run-only
+all: build rootfs run
 
-# Build the Unikraft kernel with kraft
 build:
-	yes | kraft-hyperlight build --plat hyperlight --arch x86_64
+	kraft-hyperlight build --plat hyperlight --arch x86_64
 
-# Compile C binary as static PIE and create initrd
-rootfs: hello.c
+rootfs: $(INITRD)
+
+$(INITRD): hello.c
+	@echo "Building C binary..."
 	musl-gcc -static-pie -fPIE -o hello hello.c
-	mkdir -p rootfs/bin
+	@echo "Creating rootfs..."
+	rm -rf rootfs && mkdir -p rootfs/bin
 	cp hello rootfs/bin/
+	@echo "Creating CPIO archive..."
 	cd rootfs && find . | cpio -o -H newc > ../$(INITRD)
 	@echo "Created $(INITRD)"
+	rm -rf rootfs
 
-# Build and run
-run: build rootfs run-only
+run: $(KERNEL) $(INITRD)
+	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY)
 
-# Run without rebuilding
 run-only:
 	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY)
 
-# Performance benchmark
-benchmark: build rootfs
-	@echo "=== Hello C on Hyperlight Benchmark ==="
+benchmark: $(KERNEL) $(INITRD)
+	@echo "Hello C on Hyperlight Benchmark"
 	@echo "Kernel: $(KERNEL)"
 	@echo "Initrd: $(INITRD)"
 	@echo "Memory: $(MEMORY)"
 	@echo ""
-	@echo "--- Single run (with output) ---"
-	@/usr/bin/time -f "real %e\nuser %U\nsys %S" hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) 2>&1
+	@echo "Single run (with output):"
+	@time -p hyperlight-unikraft -q $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) 2>&1
 	@echo ""
-	@echo "--- 10 runs ---"
+	@echo "$(BENCHMARK_RUNS) runs:"
 	@total=0; \
-	for i in 1 2 3 4 5 6 7 8 9 10; do \
-		t=$$(/usr/bin/time -f "%e" hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) 2>&1 | tail -1); \
-		ms=$$(echo "$$t * 1000 / 1" | bc); \
+	for i in $$(seq 1 $(BENCHMARK_RUNS)); do \
+		start=$$(date +%s%N); \
+		hyperlight-unikraft -q $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) 2>/dev/null; \
+		end=$$(date +%s%N); \
+		elapsed=$$((end - start)); \
+		ms=$$((elapsed / 1000000)); \
 		echo "  Run $$i: $${ms}ms"; \
-		total=$$((total + ms)); \
+		total=$$((total + elapsed)); \
 	done; \
-	avg=$$((total / 10)); \
+	avg=$$((total / $(BENCHMARK_RUNS) / 1000000)); \
 	echo ""; \
 	echo "Average: $${avg}ms"
 
 clean:
-	rm -rf .unikraft/build rootfs hello $(INITRD)
-	@echo "Cleaned build artifacts"
+	rm -rf rootfs $(INITRD) hello
+	rm -rf .unikraft
