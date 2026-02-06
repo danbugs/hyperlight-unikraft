@@ -366,7 +366,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "824386967a6a98e7f99d5c15d40cd1534b0ebfc4193a7109689dcf5322e8d744"
 dependencies = [
  "libc",
- "nix",
+ "nix 0.26.4",
  "smallvec",
  "thiserror 1.0.69",
  "tracing",
@@ -483,6 +483,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 [[package]]
 name = "hyperlight-common"
 version = "0.12.0"
+source = "git+https://github.com/danbugs/hyperlight.git?branch=hyperlight-platform#bdd07cfda66a96a4bd643813a7171241ccd0f06c"
 dependencies = [
  "anyhow",
  "flatbuffers",
@@ -495,6 +496,7 @@ dependencies = [
 [[package]]
 name = "hyperlight-host"
 version = "0.12.0"
+source = "git+https://github.com/danbugs/hyperlight.git?branch=hyperlight-platform#bdd07cfda66a96a4bd643813a7171241ccd0f06c"
 dependencies = [
  "anyhow",
  "bitflags 2.10.0",
@@ -540,6 +542,7 @@ dependencies = [
  "anyhow",
  "clap",
  "hyperlight-host",
+ "nix 0.29.0",
 ]
 
 [[package]]
@@ -836,6 +839,18 @@ checksum = "598beaf3cc6fdd9a5dfb1630c2800c7acd31df7aaf0f565796fba2b53ca1af1b"
 dependencies = [
  "bitflags 1.3.2",
  "cfg-if",
+ "libc",
+]
+
+[[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.10.0",
+ "cfg-if",
+ "cfg_aliases",
  "libc",
 ]
 
