@@ -9,26 +9,27 @@ unikraft:
     # Platform
     CONFIG_PLAT_HYPERLIGHT: 'y'
     CONFIG_LIBUKINTCTLR_HYPERLIGHT: 'y'
-    CONFIG_HYPERLIGHT_MAX_GUEST_LOG_LEVEL: 5
+    CONFIG_HYPERLIGHT_MAX_GUEST_LOG_LEVEL: 0
 
-    # Debug output
-    CONFIG_LIBUKDEBUG: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK_CRIT: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK_ERR: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK_WARN: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK_INFO: 'y'
-    CONFIG_LIBUKPRINT_KLVL_INFO: 'y'
+    # Suppress all kernel logging (compile-time filtering)
+    # NOTE: CONFIG_LIBUKDEBUG cannot be disabled (force-selected by platform).
+    # The old CONFIG_LIBUKDEBUG_PRINTK_* names no longer exist; the print
+    # system was refactored to CONFIG_LIBUKPRINT_KLVL_*.
+    CONFIG_LIBUKPRINT_KLVL_CRIT: 'y'
+    CONFIG_LIBUKPRINT_PRINT_TIME: 'n'
+    CONFIG_LIBUKPRINT_PRINT_SRCNAME: 'n'
+    CONFIG_LIBUKBOOT_BANNER_NONE: 'y'
 
     # Size optimization
     CONFIG_OPTIMIZE_SIZE: 'y'
 
-    # VFS and initrd support
+    # VFS and initrd support - use cpiovfs for zero-copy mount
     CONFIG_LIBVFSCORE: 'y'
     CONFIG_LIBVFSCORE_AUTOMOUNT_CI: 'y'
-    CONFIG_LIBVFSCORE_AUTOMOUNT_CI_INITRD: 'y'
-    CONFIG_LIBRAMFS: 'y'
-    CONFIG_LIBUKCPIO: 'y'
+    CONFIG_LIBVFSCORE_AUTOMOUNT_CI_CUSTOM: 'y'
+    CONFIG_LIBCPIOVFS: 'y'
+    CONFIG_LIBVFSCORE_AUTOMOUNT_CI0_MP: '/'
+    CONFIG_LIBVFSCORE_AUTOMOUNT_CI0_DRIVER: 'cpiovfs'
 
     # ELF loader - execute Python binary, script passed via cmdline
     CONFIG_APPELFLOADER: 'y'
@@ -36,9 +37,9 @@ unikraft:
     CONFIG_APPELFLOADER_CUSTOMAPPNAME: 'n'
     CONFIG_APPELFLOADER_VFSEXEC_ENVPATH: 'n'
     CONFIG_APPELFLOADER_VFSEXEC_PATH: '/usr/local/bin/python3'
-    CONFIG_APPELFLOADER_VFSEXEC_EXECBIT_CHECK: 'n'
-    CONFIG_LIBPOSIX_ENVIRON_ENVP0: '"PATH=/usr/local/bin:/usr/bin:/bin"'
-    CONFIG_LIBPOSIX_ENVIRON_ENVP1: '"LD_LIBRARY_PATH=/usr/local/lib"'
+    CONFIG_APPELFLOADER_VFSEXEC_EXECBIT: 'n'
+    CONFIG_LIBPOSIX_ENVIRON_ENVP0: 'PATH=/usr/local/bin:/usr/bin:/bin'
+    CONFIG_LIBPOSIX_ENVIRON_ENVP1: 'LD_LIBRARY_PATH=/usr/local/lib'
     CONFIG_LIBELF: 'y'
 
     # Random number support (required for Python)

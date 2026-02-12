@@ -56,6 +56,7 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    let total_start = std::time::Instant::now();
     let args = Args::parse();
 
     let heap_size = parse_memory(&args.memory)?;
@@ -73,26 +74,45 @@ fn main() -> Result<()> {
         eprintln!("Starting kernel...");
     }
 
-    let initrd_data = if let Some(ref path) = args.initrd {
-        Some(std::fs::read(path)?)
+    let t0 = std::time::Instant::now();
+    let initrd_file = if let Some(ref path) = args.initrd {
+        Some(std::fs::File::open(path)?)
     } else {
         None
     };
+    let initrd_mmap = if let Some(ref file) = initrd_file {
+        Some(unsafe { memmap2::Mmap::map(file)? })
+    } else {
+        None
+    };
+    let read_time = t0.elapsed();
 
     let config = VmConfig::default()
         .with_heap_size(heap_size)
         .with_stack_size(stack_size);
 
+    let t1 = std::time::Instant::now();
     run_vm(
         &args.kernel,
-        initrd_data.as_deref(),
+        initrd_mmap.as_deref(),
         &args.app_args,
         config,
     )?;
+    let vm_time = t1.elapsed();
+
+    let total_time = total_start.elapsed();
 
     if !args.quiet {
         eprintln!("Kernel completed");
     }
+
+    eprintln!(
+        "[timing] initrd_read={:.1}ms vm_total={:.1}ms total={:.1}ms initrd_size={}",
+        read_time.as_secs_f64() * 1000.0,
+        vm_time.as_secs_f64() * 1000.0,
+        total_time.as_secs_f64() * 1000.0,
+        initrd_mmap.as_ref().map(|d| d.len()).unwrap_or(0),
+    );
 
     Ok(())
 }

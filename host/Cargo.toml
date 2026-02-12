@@ -18,3 +18,4 @@ hyperlight-host = { git = "https://github.com/danbugs/hyperlight.git", branch = 
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 nix = { version = "0.29", features = ["fs"] }
+memmap2 = "0.9"
