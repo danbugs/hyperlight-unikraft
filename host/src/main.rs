@@ -22,7 +22,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use hyperlight_unikraft::{parse_memory, run_vm, VmConfig};
+use hyperlight_unikraft::{parse_memory, run_vm, run_vm_with_tools, ToolRegistry, VmConfig};
 use std::path::PathBuf;
 
 /// Run Unikraft unikernels on Hyperlight
@@ -49,6 +49,11 @@ struct Args {
     /// Quiet mode - suppress kernel output
     #[arg(long, short = 'q')]
     quiet: bool,
+
+    /// Enable tool dispatch via __dispatch host function.
+    /// Registers a demo 'echo' tool for testing.
+    #[arg(long)]
+    enable_tools: bool,
 
     /// Application arguments (passed after --)
     #[arg(last = true)]
@@ -92,12 +97,34 @@ fn main() -> Result<()> {
         .with_stack_size(stack_size);
 
     let t1 = std::time::Instant::now();
-    run_vm(
-        &args.kernel,
-        initrd_mmap.as_deref(),
-        &args.app_args,
-        config,
-    )?;
+
+    if args.enable_tools {
+        // Register demo tools and run with __dispatch support
+        let mut tools = ToolRegistry::new();
+
+        // Echo tool: returns whatever args it receives
+        tools.register("echo", |args| Ok(args));
+
+        if !args.quiet {
+            eprintln!("Tools enabled: echo");
+        }
+
+        run_vm_with_tools(
+            &args.kernel,
+            initrd_mmap.as_deref(),
+            &args.app_args,
+            config,
+            tools,
+        )?;
+    } else {
+        run_vm(
+            &args.kernel,
+            initrd_mmap.as_deref(),
+            &args.app_args,
+            config,
+        )?;
+    }
+
     let vm_time = t1.elapsed();
 
     let total_time = total_start.elapsed();
