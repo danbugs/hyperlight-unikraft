@@ -3,7 +3,7 @@ specification: '0.6'
 name: shell-hyperlight
 
 unikraft:
-  source: /home/danbugs/repos/unikraft
+  source: https://github.com/danbugs/unikraft.git
   version: hyperlight-platform
   kconfig:
     # Platform
@@ -55,7 +55,7 @@ unikraft:
 
 libraries:
   app-elfloader:
-    source: /home/danbugs/repos/app-elfloader
+    source: https://github.com/danbugs/app-elfloader.git
     version: hyperlight-platform
   libelf:
     source: https://github.com/unikraft/lib-libelf.git
