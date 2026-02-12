@@ -86,7 +86,7 @@ pub fn prepend_cmdline_to_initrd(initrd: Option<&[u8]>, app_args: &[String]) -> 
     let cmdline = if app_args.is_empty() {
         String::new()
     } else {
-        format!("-- {}", app_args.join(" "))
+        app_args.join(" ")
     };
 
     if cmdline.is_empty() && initrd.is_none() {
@@ -134,12 +134,16 @@ pub fn run_vm(
         return Err(anyhow!("Kernel file not found: {:?}", kernel_path));
     }
 
+    let t0 = std::time::Instant::now();
+
     let mut sandbox_config = SandboxConfiguration::default();
     sandbox_config.set_heap_size(config.heap_size);
     sandbox_config.set_stack_size(config.stack_size);
 
     let extended_initrd = prepend_cmdline_to_initrd(initrd, app_args);
+    let prepend_time = t0.elapsed();
 
+    let t1 = std::time::Instant::now();
     let kernel_path_str = kernel_path.to_string_lossy().to_string();
     let env = GuestEnvironment::new(
         GuestBinary::FilePath(kernel_path_str),
@@ -147,12 +151,24 @@ pub fn run_vm(
     );
 
     let sandbox = UninitializedSandbox::new(env, Some(sandbox_config))?;
+    let sandbox_time = t1.elapsed();
 
+    let t2 = std::time::Instant::now();
     // Run the kernel - unikernels exit via HLT which returns an error
     match sandbox.evolve() {
-        Ok(_) => Ok(()),
-        Err(_) => Ok(()), // HLT is expected for unikernels
+        Ok(_) => {}
+        Err(_) => {} // HLT is expected for unikernels
     }
+    let evolve_time = t2.elapsed();
+
+    eprintln!(
+        "[timing] prepend={:.1}ms sandbox_new={:.1}ms evolve={:.1}ms",
+        prepend_time.as_secs_f64() * 1000.0,
+        sandbox_time.as_secs_f64() * 1000.0,
+        evolve_time.as_secs_f64() * 1000.0,
+    );
+
+    Ok(())
 }
 
 /// Result of running a VM with captured output
