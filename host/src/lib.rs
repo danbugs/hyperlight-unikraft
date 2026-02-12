@@ -3,12 +3,15 @@
 //! This library provides functionality to run Unikraft kernels on Hyperlight.
 
 use anyhow::{anyhow, Result};
+use hyperlight_host::func::Registerable;
 use hyperlight_host::sandbox::uninitialized::GuestEnvironment;
 use hyperlight_host::sandbox::SandboxConfiguration;
 use hyperlight_host::{GuestBinary, UninitializedSandbox};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Magic header for cmdline embedded in initrd: "HLCMDLN\0"
 const CMDLINE_MAGIC: &[u8; 8] = b"HLCMDLN\0";
@@ -254,4 +257,134 @@ pub fn run_vm_capture_output(
             setup_time,
         }),
     }
+}
+
+/// Registry of tool handlers that can be called from guest user-space.
+///
+/// Tools are called via the `__dispatch` host function protocol:
+/// - Guest writes JSON `{"name":"tool_name","args":{...}}` to `/dev/hcall`
+/// - Kernel encodes as FlatBuffer, triggers VM exit
+/// - Host decodes, routes to registered tool handler
+/// - Handler receives args as `serde_json::Value`, returns result or error
+/// - Result is sent back as JSON to the guest
+pub struct ToolRegistry {
+    tools: HashMap<
+        String,
+        Box<dyn Fn(serde_json::Value) -> Result<serde_json::Value> + Send + Sync>,
+    >,
+}
+
+impl ToolRegistry {
+    pub fn new() -> Self {
+        Self {
+            tools: HashMap::new(),
+        }
+    }
+
+    /// Register a tool handler.
+    pub fn register<F>(&mut self, name: &str, handler: F)
+    where
+        F: Fn(serde_json::Value) -> Result<serde_json::Value> + Send + Sync + 'static,
+    {
+        self.tools.insert(name.to_string(), Box::new(handler));
+    }
+
+    /// Dispatch a JSON request to the appropriate tool handler.
+    /// Always returns valid JSON bytes (errors are encoded in the response).
+    pub fn dispatch(&self, payload: &[u8]) -> Vec<u8> {
+        let result = self.dispatch_inner(payload);
+        let json = match result {
+            Ok(value) => serde_json::json!({ "result": value }),
+            Err(e) => serde_json::json!({ "error": e.to_string() }),
+        };
+        serde_json::to_vec(&json).unwrap_or_else(|_| b"{\"error\":\"serialization failed\"}".to_vec())
+    }
+
+    fn dispatch_inner(&self, payload: &[u8]) -> Result<serde_json::Value> {
+        let request: serde_json::Value =
+            serde_json::from_slice(payload).map_err(|e| anyhow!("invalid JSON: {}", e))?;
+
+        let name = request["name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("missing 'name' field"))?;
+
+        let args = request
+            .get("args")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+
+        let handler = self
+            .tools
+            .get(name)
+            .ok_or_else(|| anyhow!("unknown tool: {}", name))?;
+
+        handler(args)
+    }
+}
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Run a Unikraft kernel with registered tool handlers.
+///
+/// Tools are exposed to guest user-space via the `/dev/hcall` device.
+/// The `__dispatch` host function is automatically registered to route
+/// JSON requests from the guest to the appropriate tool handler.
+pub fn run_vm_with_tools(
+    kernel_path: &Path,
+    initrd: Option<&[u8]>,
+    app_args: &[String],
+    config: VmConfig,
+    tools: ToolRegistry,
+) -> Result<()> {
+    if !kernel_path.exists() {
+        return Err(anyhow!("Kernel file not found: {:?}", kernel_path));
+    }
+
+    let t0 = std::time::Instant::now();
+
+    let mut sandbox_config = SandboxConfiguration::default();
+    sandbox_config.set_heap_size(config.heap_size);
+    sandbox_config.set_stack_size(config.stack_size);
+
+    let extended_initrd = prepend_cmdline_to_initrd(initrd, app_args);
+    let prepend_time = t0.elapsed();
+
+    let t1 = std::time::Instant::now();
+    let kernel_path_str = kernel_path.to_string_lossy().to_string();
+    let env = GuestEnvironment::new(
+        GuestBinary::FilePath(kernel_path_str),
+        extended_initrd.as_deref(),
+    );
+
+    let mut sandbox = UninitializedSandbox::new(env, Some(sandbox_config))?;
+
+    // Register __dispatch host function
+    let tools = Arc::new(tools);
+    let tools_ref = tools.clone();
+    sandbox.register_host_function(
+        "__dispatch",
+        move |payload: Vec<u8>| -> Vec<u8> { tools_ref.dispatch(&payload) },
+    )?;
+
+    let sandbox_time = t1.elapsed();
+
+    let t2 = std::time::Instant::now();
+    match sandbox.evolve() {
+        Ok(_) => {}
+        Err(_) => {} // HLT is expected for unikernels
+    }
+    let evolve_time = t2.elapsed();
+
+    eprintln!(
+        "[timing] prepend={:.1}ms sandbox_new={:.1}ms evolve={:.1}ms",
+        prepend_time.as_secs_f64() * 1000.0,
+        sandbox_time.as_secs_f64() * 1000.0,
+        evolve_time.as_secs_f64() * 1000.0,
+    );
+
+    Ok(())
 }
