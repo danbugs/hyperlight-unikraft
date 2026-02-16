@@ -14,6 +14,10 @@ examples/python/python
 *.cpio
 rootfs/
 
+# .NET build artifacts
+bin/
+obj/
+
 # IDE
 .vscode/
 .idea/
