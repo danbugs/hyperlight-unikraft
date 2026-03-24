@@ -16,6 +16,7 @@ unikraft:
     CONFIG_LIBUKDEBUG_PRINTK_INFO: 'y'
     CONFIG_LIBUKPRINT_KLVL_INFO: 'y'
     CONFIG_OPTIMIZE_SIZE: 'y'
+    CONFIG_OPTIMIZE_PIE: 'y'
     CONFIG_LIBVFSCORE: 'y'
     CONFIG_LIBVFSCORE_AUTOMOUNT_CI: 'y'
     CONFIG_LIBVFSCORE_AUTOMOUNT_CI_INITRD: 'y'
@@ -44,6 +45,8 @@ unikraft:
     # TLS
     CONFIG_LIBCONTEXT: 'y'
     CONFIG_LIBCONTEXT_CLEAR_TBSS: 'y'
+    # Disable paging/vmem - Hyperlight identity-maps all guest memory
+    CONFIG_PAGING: 'n'
 
 libraries:
   app-elfloader:
