@@ -13,12 +13,21 @@ KERNEL = .unikraft/build/helloworld-hyperlight_hyperlight-x86_64
 INITRD = hello-initrd.cpio
 MEMORY ?= 4Mi
 BENCHMARK_RUNS ?= 10
+KRAFT_NAME := $(shell grep '^name:' kraft.yaml 2>/dev/null | awk '{print $$2}')
 
-include ../common.mk
-
-.PHONY: all rootfs run run-only benchmark clean
+.PHONY: all build rootfs run run-only benchmark rebuild clean
 
 all: build rootfs run
+
+build:
+	kraft-hyperlight build --plat hyperlight --arch x86_64
+
+rebuild: clean
+	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64
+	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64.old
+	rm -f $(HOME)/.local/share/kraftkit/sources/unikraft/*.tar.gz
+	rm -f $(HOME)/.local/share/kraftkit/sources/apps/elfloader/*.tar.gz
+	kraft-hyperlight build --plat hyperlight --arch x86_64
 
 rootfs: $(INITRD)
 

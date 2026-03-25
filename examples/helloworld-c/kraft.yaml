@@ -7,9 +7,13 @@ unikraft:
   kconfig:
     CONFIG_PLAT_HYPERLIGHT: 'y'
     CONFIG_LIBUKINTCTLR_HYPERLIGHT: 'y'
-    CONFIG_HYPERLIGHT_MAX_GUEST_LOG_LEVEL: '0'
-    CONFIG_LIBUKDEBUG: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK: 'n'
+    CONFIG_HYPERLIGHT_MAX_GUEST_LOG_LEVEL: 0
+
+    # Suppress kernel logging for performance
+    CONFIG_LIBUKPRINT_KLVL_CRIT: 'y'
+    CONFIG_LIBUKPRINT_PRINT_TIME: 'n'
+    CONFIG_LIBUKPRINT_PRINT_SRCNAME: 'n'
+    CONFIG_LIBUKBOOT_BANNER_NONE: 'y'
     CONFIG_OPTIMIZE_SIZE: 'y'
     CONFIG_OPTIMIZE_PIE: 'y'
     CONFIG_LIBVFSCORE: 'y'
@@ -48,7 +52,7 @@ unikraft:
 libraries:
   app-elfloader:
     source: https://github.com/danbugs/app-elfloader.git
-    version: hyperlight-platform
+    version: hyperlight-platform-v0.13.1
   libelf:
     source: https://github.com/unikraft/lib-libelf.git
     version: staging
