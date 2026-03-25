@@ -4,24 +4,22 @@ name: go-hyperlight
 
 unikraft:
   source: https://github.com/danbugs/unikraft.git
-  version: hyperlight-platform
+  version: hyperlight-platform-v0.13.1
   kconfig:
     # Platform
     CONFIG_PLAT_HYPERLIGHT: 'y'
     CONFIG_LIBUKINTCTLR_HYPERLIGHT: 'y'
-    CONFIG_HYPERLIGHT_MAX_GUEST_LOG_LEVEL: 5
+    CONFIG_HYPERLIGHT_MAX_GUEST_LOG_LEVEL: 0
 
-    # Debug output
-    CONFIG_LIBUKDEBUG: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK_CRIT: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK_ERR: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK_WARN: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK_INFO: 'y'
-    CONFIG_LIBUKPRINT_KLVL_INFO: 'y'
+    # Suppress kernel logging for performance
+    CONFIG_LIBUKPRINT_KLVL_CRIT: 'y'
+    CONFIG_LIBUKPRINT_PRINT_TIME: 'n'
+    CONFIG_LIBUKPRINT_PRINT_SRCNAME: 'n'
+    CONFIG_LIBUKBOOT_BANNER_NONE: 'y'
 
     # Size optimization
     CONFIG_OPTIMIZE_SIZE: 'y'
+    CONFIG_OPTIMIZE_PIE: 'y'
 
     # VFS and initrd support
     CONFIG_LIBVFSCORE: 'y'
@@ -37,6 +35,8 @@ unikraft:
     CONFIG_APPELFLOADER_VFSEXEC_ENVPATH: 'n'
     CONFIG_APPELFLOADER_VFSEXEC_PATH: '/bin/hello'
     CONFIG_LIBPOSIX_ENVIRON_ENVP0: '"PATH=/bin"'
+    CONFIG_LIBPOSIX_ENVIRON_ENVP1: '"GOMEMLIMIT=32MiB"'
+    CONFIG_LIBPOSIX_ENVIRON_ENVP2: '"GOMAXPROCS=1"'
     CONFIG_LIBELF: 'y'
 
     # Random number support
@@ -48,14 +48,22 @@ unikraft:
     CONFIG_LIBPOSIX_PROCESS_ARCH_PRCTL: 'y'
     CONFIG_LIBPOSIX_PROCESS_MULTITHREADING: 'y'
 
-    # Additional clone flags support (needed for Go/CGO pthreads)
+    # Signal and futex support (needed for Go runtime locks)
     CONFIG_LIBPOSIX_PROCESS_SIGNAL: 'y'
     CONFIG_LIBPOSIX_FUTEX: 'y'
+
+    # mmap needed by Go runtime (heap reservation + page summaries)
+    CONFIG_LIBUKMPI: 'y'
+    CONFIG_LIBUKMMAP: 'y'
+
+    # elfloader implies LIBUKVMEM which selects PAGING; override both
+    CONFIG_LIBUKVMEM: 'n'
+    CONFIG_PAGING: 'n'
 
 libraries:
   app-elfloader:
     source: https://github.com/danbugs/app-elfloader.git
-    version: hyperlight-platform
+    version: hyperlight-platform-v0.13.1
   libelf:
     source: https://github.com/unikraft/lib-libelf.git
     version: staging
