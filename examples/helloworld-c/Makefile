@@ -6,19 +6,19 @@
 #   make run         - Build everything and run
 #   make benchmark   - Benchmark cold start time
 #   make all         - Build everything and run
+#   make rebuild     - Clean everything and rebuild from scratch
 #   make clean       - Clean up
 
 KERNEL = .unikraft/build/helloworld-hyperlight_hyperlight-x86_64
 INITRD = hello-initrd.cpio
-MEMORY ?= 32Mi
+MEMORY ?= 4Mi
 BENCHMARK_RUNS ?= 10
 
-.PHONY: all build rootfs run run-only benchmark clean
+include ../common.mk
+
+.PHONY: all rootfs run run-only benchmark clean
 
 all: build rootfs run
-
-build:
-	kraft-hyperlight build --plat hyperlight --arch x86_64
 
 rootfs: $(INITRD)
 

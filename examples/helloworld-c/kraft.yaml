@@ -3,18 +3,13 @@ name: helloworld-hyperlight
 
 unikraft:
   source: https://github.com/danbugs/unikraft.git
-  version: hyperlight-platform
+  version: hyperlight-platform-v0.13.1
   kconfig:
     CONFIG_PLAT_HYPERLIGHT: 'y'
     CONFIG_LIBUKINTCTLR_HYPERLIGHT: 'y'
     CONFIG_HYPERLIGHT_MAX_GUEST_LOG_LEVEL: '0'
     CONFIG_LIBUKDEBUG: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK_CRIT: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK_ERR: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK_WARN: 'y'
-    CONFIG_LIBUKDEBUG_PRINTK_INFO: 'y'
-    CONFIG_LIBUKPRINT_KLVL_INFO: 'y'
+    CONFIG_LIBUKDEBUG_PRINTK: 'n'
     CONFIG_OPTIMIZE_SIZE: 'y'
     CONFIG_OPTIMIZE_PIE: 'y'
     CONFIG_LIBVFSCORE: 'y'
@@ -46,6 +41,8 @@ unikraft:
     CONFIG_LIBCONTEXT: 'y'
     CONFIG_LIBCONTEXT_CLEAR_TBSS: 'y'
     # Disable paging/vmem - Hyperlight identity-maps all guest memory
+    # elfloader implies LIBUKVMEM which selects PAGING; override both
+    CONFIG_LIBUKVMEM: 'n'
     CONFIG_PAGING: 'n'
 
 libraries:

@@ -143,10 +143,11 @@ pub fn run_vm(
 
     let mut sandbox_config = SandboxConfiguration::default();
     sandbox_config.set_heap_size(config.heap_size);
-    // Scratch must be large enough for page tables + I/O buffers + stacks.
-    // Page tables need ~(heap_size / 2Mi) * 4Ki + overhead.
+    // Scratch holds page tables + CoW copies of all guest writable pages touched
+    // at runtime. CoW is used for all writable pages (no unikernel_guest feature),
+    // so reserve 1 MiB base for CoW copies on top of the page table estimate.
     let pt_estimate = ((config.heap_size as usize / (2 * 1024 * 1024)) + 16) * 4096;
-    let min_scratch = pt_estimate + 256 * 1024;
+    let min_scratch = pt_estimate + 1024 * 1024;
     let scratch = min_scratch.next_multiple_of(4096);
     sandbox_config.set_scratch_size(scratch);
 
@@ -206,10 +207,11 @@ pub fn run_vm_capture_output(
 
     let mut sandbox_config = SandboxConfiguration::default();
     sandbox_config.set_heap_size(config.heap_size);
-    // Scratch must be large enough for page tables + I/O buffers + stacks.
-    // Page tables need ~(heap_size / 2Mi) * 4Ki + overhead.
+    // Scratch holds page tables + CoW copies of all guest writable pages touched
+    // at runtime. CoW is used for all writable pages (no unikernel_guest feature),
+    // so reserve 1 MiB base for CoW copies on top of the page table estimate.
     let pt_estimate = ((config.heap_size as usize / (2 * 1024 * 1024)) + 16) * 4096;
-    let min_scratch = pt_estimate + 256 * 1024;
+    let min_scratch = pt_estimate + 1024 * 1024;
     let scratch = min_scratch.next_multiple_of(4096);
     sandbox_config.set_scratch_size(scratch);
 
@@ -357,10 +359,11 @@ pub fn run_vm_with_tools(
 
     let mut sandbox_config = SandboxConfiguration::default();
     sandbox_config.set_heap_size(config.heap_size);
-    // Scratch must be large enough for page tables + I/O buffers + stacks.
-    // Page tables need ~(heap_size / 2Mi) * 4Ki + overhead.
+    // Scratch holds page tables + CoW copies of all guest writable pages touched
+    // at runtime. CoW is used for all writable pages (no unikernel_guest feature),
+    // so reserve 1 MiB base for CoW copies on top of the page table estimate.
     let pt_estimate = ((config.heap_size as usize / (2 * 1024 * 1024)) + 16) * 4096;
-    let min_scratch = pt_estimate + 256 * 1024;
+    let min_scratch = pt_estimate + 1024 * 1024;
     let scratch = min_scratch.next_multiple_of(4096);
     sandbox_config.set_scratch_size(scratch);
 

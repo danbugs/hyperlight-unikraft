@@ -15,7 +15,7 @@ name = "hyperlight-unikraft"
 path = "src/main.rs"
 
 [dependencies]
-hyperlight-host = { path = "/home/danbugs/repos/hyperlight-project/hyperlight/src/hyperlight_host", features = ["unikernel_guest"] }
+hyperlight-host = { path = "/home/danbugs/repos/hyperlight-project/hyperlight/src/hyperlight_host" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 nix = { version = "0.29", features = ["fs"] }

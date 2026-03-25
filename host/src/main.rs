@@ -68,6 +68,7 @@ fn main() -> Result<()> {
     let stack_size = parse_memory(&args.stack)?;
 
     if !args.quiet {
+        eprintln!("hyperlight-unikraft v{}", env!("CARGO_PKG_VERSION"));
         eprintln!("Loading kernel: {:?}", args.kernel);
         if let Some(ref initrd) = args.initrd {
             eprintln!("Loading initrd: {:?}", initrd);
