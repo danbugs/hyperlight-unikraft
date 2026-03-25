@@ -16,13 +16,21 @@ INITRD = initrd.cpio
 MEMORY ?= 256Mi
 BENCHMARK_RUNS ?= 10
 SCRIPT ?= /hello.py
+KRAFT_NAME := $(shell grep '^name:' kraft.yaml 2>/dev/null | awk '{print $$2}')
 
-.PHONY: all build rootfs run run-only run-quiet benchmark clean
+.PHONY: all build rootfs run run-only run-quiet benchmark rebuild clean
 
 all: build rootfs run
 
 # Build the Unikraft kernel using kraft
 build:
+	kraft-hyperlight build --plat hyperlight --arch x86_64
+
+rebuild: clean
+	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64
+	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64.old
+	rm -f $(HOME)/.local/share/kraftkit/sources/unikraft/*.tar.gz
+	rm -f $(HOME)/.local/share/kraftkit/sources/apps/elfloader/*.tar.gz
 	kraft-hyperlight build --plat hyperlight --arch x86_64
 
 # Build Python Docker image and export rootfs to CPIO
