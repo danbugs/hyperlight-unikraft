@@ -212,21 +212,17 @@ impl Sandbox {
             )?;
         }
 
-        // Evolve runs guest init.  For unikernels the entire program runs
-        // here and the guest exits via HLT, which Hyperlight reports as an
-        // error.  We treat evolve errors as expected for now.
-        let mut inner = match usbox.evolve() {
-            Ok(s) => s,
-            Err(_) => {
-                // Guest halted — this is normal for unikernels that run to
-                // completion during init.  We cannot take a snapshot or do
-                // further calls, but the output was already produced.
-                return Err(anyhow!("guest exited during init (expected for single-shot unikernels)"));
-            }
-        };
+        // Evolve runs the guest.  The unikernel boots, runs the application,
+        // then signals readiness via outb(108) with the dispatch function
+        // address in RAX.  This satisfies Hyperlight's init protocol and
+        // returns a MultiUseSandbox ready for call/snapshot/restore.
+        let mut inner = usbox.evolve()?;
 
-        // Take a snapshot of the post-init state for fast restore
-        let snapshot = inner.snapshot().ok().map(Arc::from);
+        // Take a snapshot of the post-init state for fast restore.
+        // This captures the fully-booted kernel + completed application.
+        // Future: snapshot should be taken BEFORE the application runs
+        // (requires deferred execution in the elfloader).
+        let snapshot = inner.snapshot().ok();
 
         Ok(Self { inner, snapshot })
     }
@@ -239,6 +235,18 @@ impl Sandbox {
         if let Some(ref snap) = self.snapshot {
             self.inner.restore(snap.clone())?;
         }
+        Ok(())
+    }
+
+    /// Call the dispatch function to re-run the application.
+    ///
+    /// Requires a prior `restore()` to reset guest state.
+    /// The dispatch function pops the FunctionCall from input,
+    /// runs the application, pushes a void result, and halts.
+    pub fn call_run(&mut self) -> Result<()> {
+        // call() with Void return type — the function name doesn't matter
+        // to the guest (it ignores it and just runs the app).
+        let _: () = self.inner.call("run", ())?;
         Ok(())
     }
 }
@@ -257,11 +265,8 @@ pub fn run_vm(
     app_args: &[String],
     config: VmConfig,
 ) -> Result<()> {
-    // For single-shot unikernels, Sandbox::new() runs everything.
-    // The "guest exited during init" error is expected and suppressed.
-    match Sandbox::new(kernel_path, initrd, app_args, config, None) {
-        Ok(_) | Err(_) => Ok(()),
-    }
+    let _ = Sandbox::new(kernel_path, initrd, app_args, config, None)?;
+    Ok(())
 }
 
 /// Run a Unikraft kernel with tool dispatch support.
@@ -272,7 +277,6 @@ pub fn run_vm_with_tools(
     config: VmConfig,
     tools: ToolRegistry,
 ) -> Result<()> {
-    match Sandbox::new(kernel_path, initrd, app_args, config, Some(tools)) {
-        Ok(_) | Err(_) => Ok(()),
-    }
+    let _ = Sandbox::new(kernel_path, initrd, app_args, config, Some(tools))?;
+    Ok(())
 }

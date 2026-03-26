@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use hyperlight_unikraft::{parse_memory, run_vm, run_vm_with_tools, ToolRegistry, VmConfig};
+use hyperlight_unikraft::{parse_memory, Sandbox, ToolRegistry, VmConfig};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -36,6 +36,10 @@ struct Args {
     /// Enable tool dispatch via __dispatch host function
     #[arg(long)]
     enable_tools: bool,
+
+    /// Re-run the application N times via snapshot/restore + call
+    #[arg(long, default_value = "0")]
+    repeat: u32,
 
     /// Application arguments (passed after --)
     #[arg(last = true)]
@@ -75,23 +79,42 @@ fn main() -> Result<()> {
         None
     };
 
-    if tools.is_some() {
-        run_vm_with_tools(
-            &args.kernel,
-            initrd_mmap.as_deref(),
-            &args.app_args,
-            config,
-            tools.unwrap(),
-        )?;
-    } else {
-        run_vm(
-            &args.kernel,
-            initrd_mmap.as_deref(),
-            &args.app_args,
-            config,
-        )?;
+    // Create sandbox — this runs evolve (full program execution)
+    let mut sandbox = Sandbox::new(
+        &args.kernel,
+        initrd_mmap.as_deref(),
+        &args.app_args,
+        config,
+        tools,
+    )?;
+
+    let evolve_time = t0.elapsed();
+
+    // If --repeat is set, demonstrate snapshot/restore + call
+    if args.repeat > 0 {
+        for i in 0..args.repeat {
+            let t_restore = std::time::Instant::now();
+            sandbox.restore()?;
+            let restore_time = t_restore.elapsed();
+
+            let t_call = std::time::Instant::now();
+            sandbox.call_run()?;
+            let call_time = t_call.elapsed();
+
+            eprintln!(
+                "[repeat {}/{}] restore={:.1}ms call={:.1}ms",
+                i + 1,
+                args.repeat,
+                restore_time.as_secs_f64() * 1000.0,
+                call_time.as_secs_f64() * 1000.0,
+            );
+        }
     }
 
-    eprintln!("[timing] total={:.1}ms", t0.elapsed().as_secs_f64() * 1000.0);
+    eprintln!(
+        "[timing] evolve={:.1}ms total={:.1}ms",
+        evolve_time.as_secs_f64() * 1000.0,
+        t0.elapsed().as_secs_f64() * 1000.0,
+    );
     Ok(())
 }
