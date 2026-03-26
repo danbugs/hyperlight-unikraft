@@ -37,7 +37,8 @@ struct Args {
     #[arg(long)]
     enable_tools: bool,
 
-    /// Re-run the application N times via snapshot/restore + call
+    /// Run the application N additional times via snapshot/restore + call.
+    /// The first run always happens. --repeat=2 means 3 total runs.
     #[arg(long, default_value = "0")]
     repeat: u32,
 
@@ -79,7 +80,7 @@ fn main() -> Result<()> {
         None
     };
 
-    // Create sandbox — this runs evolve (full program execution)
+    // Phase 1: evolve — boots kernel, loads ELF, signals ready
     let mut sandbox = Sandbox::new(
         &args.kernel,
         initrd_mmap.as_deref(),
@@ -87,24 +88,24 @@ fn main() -> Result<()> {
         config,
         tools,
     )?;
-
     let evolve_time = t0.elapsed();
 
-    // If --repeat is set, demonstrate snapshot/restore + call
-    if args.repeat > 0 {
-        for i in 0..args.repeat {
-            let t_restore = std::time::Instant::now();
-            sandbox.restore()?;
-            let restore_time = t_restore.elapsed();
+    // Phase 2: restore + call — runs the application
+    let total_runs = 1 + args.repeat;
+    for i in 0..total_runs {
+        let t_restore = std::time::Instant::now();
+        sandbox.restore()?;
+        let restore_time = t_restore.elapsed();
 
-            let t_call = std::time::Instant::now();
-            sandbox.call_run()?;
-            let call_time = t_call.elapsed();
+        let t_call = std::time::Instant::now();
+        sandbox.call_run()?;
+        let call_time = t_call.elapsed();
 
+        if !args.quiet || args.repeat > 0 {
             eprintln!(
-                "[repeat {}/{}] restore={:.1}ms call={:.1}ms",
+                "[run {}/{}] restore={:.1}ms call={:.1}ms",
                 i + 1,
-                args.repeat,
+                total_runs,
                 restore_time.as_secs_f64() * 1000.0,
                 call_time.as_secs_f64() * 1000.0,
             );
