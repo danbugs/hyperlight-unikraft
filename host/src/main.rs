@@ -1,23 +1,9 @@
-//! hyperlight-unikraft: Embedded Hyperlight host for Unikraft unikernels
-//!
-//! This runs Unikraft kernels built for the Hyperlight platform. The kernel
-//! uses the ELF loader to dynamically load and execute Linux binaries from
-//! an initrd (CPIO archive).
+//! hyperlight-unikraft: run Unikraft unikernels on the Hyperlight VMM
 //!
 //! ## Usage
 //!
 //! ```bash
 //! hyperlight-unikraft <kernel> [--initrd <cpio>] [--memory <size>] [-- <app-args>]
-//! ```
-//!
-//! ## Example
-//!
-//! ```bash
-//! # Run Python with a script
-//! hyperlight-unikraft kernel.elf --initrd python-initrd.cpio --memory 256Mi -- /hello.py
-//!
-//! # Run Node.js
-//! hyperlight-unikraft kernel.elf --initrd node-initrd.cpio --memory 256Mi -- /app/hello.js
 //! ```
 
 use anyhow::Result;
@@ -25,16 +11,13 @@ use clap::Parser;
 use hyperlight_unikraft::{parse_memory, run_vm, run_vm_with_tools, ToolRegistry, VmConfig};
 use std::path::PathBuf;
 
-/// Run Unikraft unikernels on Hyperlight
 #[derive(Parser, Debug)]
-#[command(name = "hyperlight-unikraft")]
-#[command(about = "Run Unikraft unikernels on the Hyperlight VMM")]
-#[command(version)]
+#[command(name = "hyperlight-unikraft", version, about = "Run Unikraft unikernels on Hyperlight")]
 struct Args {
     /// Path to the Unikraft kernel binary
     kernel: PathBuf,
 
-    /// Path to initrd/rootfs CPIO archive (contains the application and libs)
+    /// Path to initrd/rootfs CPIO archive
     #[arg(long)]
     initrd: Option<PathBuf>,
 
@@ -46,12 +29,11 @@ struct Args {
     #[arg(long, default_value = "8Mi")]
     stack: String,
 
-    /// Quiet mode - suppress kernel output
+    /// Quiet mode — suppress host-side status messages
     #[arg(long, short = 'q')]
     quiet: bool,
 
-    /// Enable tool dispatch via __dispatch host function.
-    /// Registers a demo 'echo' tool for testing.
+    /// Enable tool dispatch via __dispatch host function
     #[arg(long)]
     enable_tools: bool,
 
@@ -61,7 +43,7 @@ struct Args {
 }
 
 fn main() -> Result<()> {
-    let total_start = std::time::Instant::now();
+    let t0 = std::time::Instant::now();
     let args = Args::parse();
 
     let heap_size = parse_memory(&args.memory)?;
@@ -69,53 +51,37 @@ fn main() -> Result<()> {
 
     if !args.quiet {
         eprintln!("hyperlight-unikraft v{}", env!("CARGO_PKG_VERSION"));
-        eprintln!("Loading kernel: {:?}", args.kernel);
-        if let Some(ref initrd) = args.initrd {
-            eprintln!("Loading initrd: {:?}", initrd);
+        eprintln!("Kernel: {:?}", args.kernel);
+        if let Some(ref p) = args.initrd {
+            eprintln!("Initrd: {:?}", p);
         }
-        eprintln!("Memory: {} bytes, Stack: {} bytes", heap_size, stack_size);
-        if !args.app_args.is_empty() {
-            eprintln!("App args: {:?}", args.app_args);
-        }
-        eprintln!("Starting kernel...");
+        eprintln!("Memory: {heap_size} B, Stack: {stack_size} B");
     }
 
-    let t0 = std::time::Instant::now();
-    let initrd_file = if let Some(ref path) = args.initrd {
-        Some(std::fs::File::open(path)?)
-    } else {
-        None
-    };
-    let initrd_mmap = if let Some(ref file) = initrd_file {
-        Some(unsafe { memmap2::Mmap::map(file)? })
-    } else {
-        None
-    };
-    let read_time = t0.elapsed();
+    let initrd_mmap = args.initrd.as_ref().map(|p| {
+        let f = std::fs::File::open(p).expect("open initrd");
+        unsafe { memmap2::Mmap::map(&f).expect("mmap initrd") }
+    });
 
     let config = VmConfig::default()
         .with_heap_size(heap_size)
         .with_stack_size(stack_size);
 
-    let t1 = std::time::Instant::now();
+    let tools = if args.enable_tools {
+        let mut t = ToolRegistry::new();
+        t.register("echo", |a| Ok(a));
+        Some(t)
+    } else {
+        None
+    };
 
-    if args.enable_tools {
-        // Register demo tools and run with __dispatch support
-        let mut tools = ToolRegistry::new();
-
-        // Echo tool: returns whatever args it receives
-        tools.register("echo", |args| Ok(args));
-
-        if !args.quiet {
-            eprintln!("Tools enabled: echo");
-        }
-
+    if tools.is_some() {
         run_vm_with_tools(
             &args.kernel,
             initrd_mmap.as_deref(),
             &args.app_args,
             config,
-            tools,
+            tools.unwrap(),
         )?;
     } else {
         run_vm(
@@ -126,21 +92,6 @@ fn main() -> Result<()> {
         )?;
     }
 
-    let vm_time = t1.elapsed();
-
-    let total_time = total_start.elapsed();
-
-    if !args.quiet {
-        eprintln!("Kernel completed");
-    }
-
-    eprintln!(
-        "[timing] initrd_read={:.1}ms vm_total={:.1}ms total={:.1}ms initrd_size={}",
-        read_time.as_secs_f64() * 1000.0,
-        vm_time.as_secs_f64() * 1000.0,
-        total_time.as_secs_f64() * 1000.0,
-        initrd_mmap.as_ref().map(|d| d.len()).unwrap_or(0),
-    );
-
+    eprintln!("[timing] total={:.1}ms", t0.elapsed().as_secs_f64() * 1000.0);
     Ok(())
 }

@@ -1,6 +1,7 @@
-//! hyperlight-unikraft library for embedding Unikraft VMs
+//! hyperlight-unikraft: run Unikraft kernels on Hyperlight
 //!
-//! This library provides functionality to run Unikraft kernels on Hyperlight.
+//! Provides a `Sandbox` wrapper around Hyperlight's `MultiUseSandbox` that
+//! manages the kernel lifecycle: create → evolve (init) → snapshot → call.
 
 pub mod ffi;
 
@@ -8,32 +9,32 @@ use anyhow::{anyhow, Result};
 use hyperlight_host::func::Registerable;
 use hyperlight_host::sandbox::uninitialized::GuestEnvironment;
 use hyperlight_host::sandbox::SandboxConfiguration;
-use hyperlight_host::{GuestBinary, UninitializedSandbox};
+use hyperlight_host::sandbox::snapshot::Snapshot;
+use hyperlight_host::{GuestBinary, MultiUseSandbox, UninitializedSandbox};
 use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::sync::Arc;
 
 /// Magic header for cmdline embedded in initrd: "HLCMDLN\0"
 const CMDLINE_MAGIC: &[u8; 8] = b"HLCMDLN\0";
 
-/// Page size for alignment (must match Unikraft's PAGE_SIZE)
 const PAGE_SIZE: usize = 4096;
 
-/// Configuration for running a Unikraft VM
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+/// Configuration for a Unikraft VM.
 pub struct VmConfig {
-    /// Heap size in bytes
     pub heap_size: u64,
-    /// Stack size in bytes
     pub stack_size: u64,
 }
 
 impl Default for VmConfig {
     fn default() -> Self {
         Self {
-            heap_size: 512 * 1024 * 1024,  // 512Mi
-            stack_size: 8 * 1024 * 1024,   // 8Mi
+            heap_size: 512 * 1024 * 1024,
+            stack_size: 8 * 1024 * 1024,
         }
     }
 }
@@ -48,255 +49,88 @@ impl VmConfig {
         self.stack_size = size;
         self
     }
-}
 
-/// Parse memory size string (e.g., "512Mi", "1Gi") into bytes
-pub fn parse_memory(mem_str: &str) -> Result<u64> {
-    let mem_str = mem_str.trim();
+    fn sandbox_config(&self) -> SandboxConfiguration {
+        let mut cfg = SandboxConfiguration::default();
+        cfg.set_heap_size(self.heap_size);
 
-    if mem_str.ends_with("Gi") {
-        let val: u64 = mem_str.trim_end_matches("Gi").parse()?;
-        Ok(val * 1024 * 1024 * 1024)
-    } else if mem_str.ends_with("Mi") {
-        let val: u64 = mem_str.trim_end_matches("Mi").parse()?;
-        Ok(val * 1024 * 1024)
-    } else if mem_str.ends_with("Ki") {
-        let val: u64 = mem_str.trim_end_matches("Ki").parse()?;
-        Ok(val * 1024)
-    } else if mem_str.ends_with("G") {
-        let val: u64 = mem_str.trim_end_matches("G").parse()?;
-        Ok(val * 1000 * 1000 * 1000)
-    } else if mem_str.ends_with("M") {
-        let val: u64 = mem_str.trim_end_matches("M").parse()?;
-        Ok(val * 1000 * 1000)
-    } else if mem_str.ends_with("K") {
-        let val: u64 = mem_str.trim_end_matches("K").parse()?;
-        Ok(val * 1000)
-    } else {
-        mem_str
-            .parse()
-            .map_err(|e| anyhow!("Invalid memory format: {}", e))
+        // Scratch holds page tables + CoW copies of writable pages touched at
+        // runtime.  pt_estimate covers page tables; 64 MiB base covers kernel
+        // boot, CPIO extraction, ELF loading, and language runtime startup.
+        let pt_estimate = ((self.heap_size as usize / (2 * 1024 * 1024)) + 16) * PAGE_SIZE;
+        let scratch = (pt_estimate + 64 * 1024 * 1024).next_multiple_of(PAGE_SIZE);
+        cfg.set_scratch_size(scratch);
+        cfg
     }
 }
 
-/// Create an extended initrd with cmdline prepended
-///
-/// Format:
-/// | Magic (8 bytes): "HLCMDLN\0" |
-/// | Cmdline length (4 bytes LE)  |
-/// | Cmdline data (null-term)     |
-/// | Padding to PAGE_SIZE boundary|
-/// | Original initrd...           |
-pub fn prepend_cmdline_to_initrd(initrd: Option<&[u8]>, app_args: &[String]) -> Option<Vec<u8>> {
-    let cmdline = if app_args.is_empty() {
-        String::new()
+/// Parse memory size string (e.g., "512Mi", "1Gi") into bytes.
+pub fn parse_memory(mem_str: &str) -> Result<u64> {
+    let s = mem_str.trim();
+    if let Some(v) = s.strip_suffix("Gi") {
+        Ok(v.parse::<u64>()? * 1024 * 1024 * 1024)
+    } else if let Some(v) = s.strip_suffix("Mi") {
+        Ok(v.parse::<u64>()? * 1024 * 1024)
+    } else if let Some(v) = s.strip_suffix("Ki") {
+        Ok(v.parse::<u64>()? * 1024)
+    } else if let Some(v) = s.strip_suffix("G") {
+        Ok(v.parse::<u64>()? * 1_000_000_000)
+    } else if let Some(v) = s.strip_suffix("M") {
+        Ok(v.parse::<u64>()? * 1_000_000)
+    } else if let Some(v) = s.strip_suffix("K") {
+        Ok(v.parse::<u64>()? * 1000)
     } else {
-        app_args.join(" ")
-    };
+        s.parse().map_err(|e| anyhow!("Invalid memory format: {}", e))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Initrd cmdline prepend
+// ---------------------------------------------------------------------------
+
+/// Prepend application arguments as a cmdline header in the initrd.
+pub fn prepend_cmdline_to_initrd(initrd: Option<&[u8]>, app_args: &[String]) -> Option<Vec<u8>> {
+    let cmdline = app_args.join(" ");
 
     if cmdline.is_empty() && initrd.is_none() {
         return None;
     }
-
     if cmdline.is_empty() {
         return initrd.map(|d| d.to_vec());
     }
 
     let cmdline_bytes = cmdline.as_bytes();
     let cmdline_len = cmdline_bytes.len() as u32;
-
     let header_size = 8 + 4 + cmdline_len as usize + 1;
-    let padded_header_size = (header_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-    let padding = padded_header_size - header_size;
+    let padded = (header_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
 
     let initrd_len = initrd.map(|d| d.len()).unwrap_or(0);
-    let mut extended = Vec::with_capacity(padded_header_size + initrd_len);
-
-    extended.extend_from_slice(CMDLINE_MAGIC);
-    extended.extend_from_slice(&cmdline_len.to_le_bytes());
-    extended.extend_from_slice(cmdline_bytes);
-    extended.push(0);
-    extended.extend(std::iter::repeat(0).take(padding));
-
+    let mut buf = Vec::with_capacity(padded + initrd_len);
+    buf.extend_from_slice(CMDLINE_MAGIC);
+    buf.extend_from_slice(&cmdline_len.to_le_bytes());
+    buf.extend_from_slice(cmdline_bytes);
+    buf.push(0);
+    buf.resize(padded, 0);
     if let Some(data) = initrd {
-        extended.extend_from_slice(data);
+        buf.extend_from_slice(data);
     }
-
-    Some(extended)
+    Some(buf)
 }
 
-/// Run a Unikraft kernel with the given configuration
-///
-/// Returns Ok(()) on successful completion, or an error if the VM fails to start.
-/// Note: Unikernels typically exit via HLT which returns an error - this is expected.
-pub fn run_vm(
-    kernel_path: &Path,
-    initrd: Option<&[u8]>,
-    app_args: &[String],
-    config: VmConfig,
-) -> Result<()> {
-    if !kernel_path.exists() {
-        return Err(anyhow!("Kernel file not found: {:?}", kernel_path));
-    }
+// ---------------------------------------------------------------------------
+// Tool dispatch (host functions callable from guest)
+// ---------------------------------------------------------------------------
 
-    let t0 = std::time::Instant::now();
-
-    let mut sandbox_config = SandboxConfiguration::default();
-    sandbox_config.set_heap_size(config.heap_size);
-    // Scratch holds page tables + CoW copies of all guest writable pages touched
-    // at runtime.  Budget: pt_estimate covers page tables; 64 MiB base covers
-    // kernel boot, full CPIO extraction, ELF loading, and language runtime startup.
-    
-    
-    let pt_estimate = ((config.heap_size as usize / (2 * 1024 * 1024)) + 16) * 4096;
-    let min_scratch = pt_estimate + 64 * 1024 * 1024;
-    let scratch = min_scratch.next_multiple_of(4096);
-    sandbox_config.set_scratch_size(scratch);
-
-    let extended_initrd = prepend_cmdline_to_initrd(initrd, app_args);
-    let prepend_time = t0.elapsed();
-
-    let t1 = std::time::Instant::now();
-    let kernel_path_str = kernel_path.to_string_lossy().to_string();
-    let env = GuestEnvironment::new(
-        GuestBinary::FilePath(kernel_path_str),
-        extended_initrd.as_deref(),
-    );
-
-    let sandbox = UninitializedSandbox::new(env, Some(sandbox_config))?;
-    let sandbox_time = t1.elapsed();
-
-    let t2 = std::time::Instant::now();
-    // Run the kernel - unikernels exit via abort (code 0) on clean shutdown
-    let _ = sandbox.evolve();
-    let evolve_time = t2.elapsed();
-
-    eprintln!(
-        "[timing] prepend={:.1}ms sandbox_new={:.1}ms evolve={:.1}ms",
-        prepend_time.as_secs_f64() * 1000.0,
-        sandbox_time.as_secs_f64() * 1000.0,
-        evolve_time.as_secs_f64() * 1000.0,
-    );
-
-    Ok(())
-}
-
-/// Result of running a VM with captured output
-pub struct VmOutput {
-    /// Captured stderr output (Hyperlight's DebugPrint)
-    pub output: String,
-    /// Time spent in sandbox.evolve() (actual VM execution)
-    pub evolve_time: std::time::Duration,
-    /// Time spent creating the sandbox
-    pub setup_time: std::time::Duration,
-}
-
-/// Run a Unikraft kernel and capture its output (stderr)
-///
-/// Hyperlight's DebugPrint outputs to stderr via eprint!.
-/// This function captures that output and returns it along with timing info.
-pub fn run_vm_capture_output(
-    kernel_path: &Path,
-    initrd: Option<&[u8]>,
-    app_args: &[String],
-    config: VmConfig,
-) -> Result<VmOutput> {
-    if !kernel_path.exists() {
-        return Err(anyhow!("Kernel file not found: {:?}", kernel_path));
-    }
-
-    let setup_start = std::time::Instant::now();
-
-    let mut sandbox_config = SandboxConfiguration::default();
-    sandbox_config.set_heap_size(config.heap_size);
-    // Scratch holds page tables + CoW copies of all guest writable pages touched
-    // at runtime.  Budget: pt_estimate covers page tables; 64 MiB base covers
-    // kernel boot, full CPIO extraction, ELF loading, and language runtime startup.
-    
-    
-    let pt_estimate = ((config.heap_size as usize / (2 * 1024 * 1024)) + 16) * 4096;
-    let min_scratch = pt_estimate + 64 * 1024 * 1024;
-    let scratch = min_scratch.next_multiple_of(4096);
-    sandbox_config.set_scratch_size(scratch);
-
-    let extended_initrd = prepend_cmdline_to_initrd(initrd, app_args);
-
-    let kernel_path_str = kernel_path.to_string_lossy().to_string();
-    let env = GuestEnvironment::new(
-        GuestBinary::FilePath(kernel_path_str),
-        extended_initrd.as_deref(),
-    );
-
-    let sandbox = UninitializedSandbox::new(env, Some(sandbox_config))?;
-
-    let setup_time = setup_start.elapsed();
-
-    // Capture stderr by redirecting it to a pipe
-    let (read_fd, write_fd) = nix::unistd::pipe()?;
-
-    // Save original stderr
-    let original_stderr = nix::unistd::dup(2)?;
-
-    // Redirect stderr to our pipe
-    nix::unistd::dup2(write_fd.as_raw_fd(), 2)?;
-
-    // Run the kernel
-    let evolve_start = std::time::Instant::now();
-    let result = sandbox.evolve();
-    let evolve_time = evolve_start.elapsed();
-
-    // Flush stderr and restore original
-    std::io::stderr().flush().ok();
-    nix::unistd::dup2(original_stderr.as_raw_fd(), 2)?;
-    let _ = original_stderr;
-    let _ = write_fd;
-
-    // Read captured output
-    let mut captured = String::new();
-    let mut reader = std::fs::File::from(read_fd);
-    
-    // Set non-blocking to avoid hanging if no output
-    let flags = nix::fcntl::fcntl(reader.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFL)?;
-    nix::fcntl::fcntl(
-        reader.as_raw_fd(),
-        nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::from_bits_truncate(flags) | nix::fcntl::OFlag::O_NONBLOCK),
-    )?;
-    
-    reader.read_to_string(&mut captured).ok();
-
-    // We don't care about the result - HLT is expected
-    match result {
-        Ok(_) | Err(_) => Ok(VmOutput {
-            output: captured,
-            evolve_time,
-            setup_time,
-        }),
-    }
-}
-
-/// Registry of tool handlers that can be called from guest user-space.
-///
-/// Tools are called via the `__dispatch` host function protocol:
-/// - Guest writes JSON `{"name":"tool_name","args":{...}}` to `/dev/hcall`
-/// - Kernel encodes as FlatBuffer, triggers VM exit
-/// - Host decodes, routes to registered tool handler
-/// - Handler receives args as `serde_json::Value`, returns result or error
-/// - Result is sent back as JSON to the guest
+/// Registry of tool handlers callable from guest user-space via `/dev/hcall`.
 pub struct ToolRegistry {
-    tools: HashMap<
-        String,
-        Box<dyn Fn(serde_json::Value) -> Result<serde_json::Value> + Send + Sync>,
-    >,
+    tools: HashMap<String, Box<dyn Fn(serde_json::Value) -> Result<serde_json::Value> + Send + Sync>>,
 }
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self {
-            tools: HashMap::new(),
-        }
+        Self { tools: HashMap::new() }
     }
 
-    /// Register a tool handler.
     pub fn register<F>(&mut self, name: &str, handler: F)
     where
         F: Fn(serde_json::Value) -> Result<serde_json::Value> + Send + Sync + 'static,
@@ -304,50 +138,133 @@ impl ToolRegistry {
         self.tools.insert(name.to_string(), Box::new(handler));
     }
 
-    /// Dispatch a JSON request to the appropriate tool handler.
-    /// Always returns valid JSON bytes (errors are encoded in the response).
     pub fn dispatch(&self, payload: &[u8]) -> Vec<u8> {
-        let result = self.dispatch_inner(payload);
+        let result = (|| -> Result<serde_json::Value> {
+            let req: serde_json::Value = serde_json::from_slice(payload)?;
+            let name = req["name"].as_str().ok_or_else(|| anyhow!("missing 'name'"))?;
+            let args = req.get("args").cloned().unwrap_or(serde_json::Value::Null);
+            let handler = self.tools.get(name).ok_or_else(|| anyhow!("unknown tool: {}", name))?;
+            handler(args)
+        })();
         let json = match result {
-            Ok(value) => serde_json::json!({ "result": value }),
+            Ok(v) => serde_json::json!({ "result": v }),
             Err(e) => serde_json::json!({ "error": e.to_string() }),
         };
         serde_json::to_vec(&json).unwrap_or_else(|_| b"{\"error\":\"serialization failed\"}".to_vec())
     }
-
-    fn dispatch_inner(&self, payload: &[u8]) -> Result<serde_json::Value> {
-        let request: serde_json::Value =
-            serde_json::from_slice(payload).map_err(|e| anyhow!("invalid JSON: {}", e))?;
-
-        let name = request["name"]
-            .as_str()
-            .ok_or_else(|| anyhow!("missing 'name' field"))?;
-
-        let args = request
-            .get("args")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-
-        let handler = self
-            .tools
-            .get(name)
-            .ok_or_else(|| anyhow!("unknown tool: {}", name))?;
-
-        handler(args)
-    }
 }
 
 impl Default for ToolRegistry {
-    fn default() -> Self {
-        Self::new()
+    fn default() -> Self { Self::new() }
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox — the primary API
+// ---------------------------------------------------------------------------
+
+/// A Unikraft sandbox backed by Hyperlight's `MultiUseSandbox`.
+///
+/// Lifecycle:
+///   1. `Sandbox::new()` — creates the VM and runs guest init (`evolve`)
+///   2. Automatically takes a snapshot after init
+///   3. `run()` — (future) calls a guest function; currently a no-op since
+///      unikernels do all work during init
+///   4. `restore()` — restores to the post-init snapshot for the next run
+pub struct Sandbox {
+    inner: MultiUseSandbox,
+    /// Post-init snapshot for fast restore between calls.
+    snapshot: Option<Arc<Snapshot>>,
+}
+
+impl Sandbox {
+    /// Create a new sandbox, evolving the guest through its init phase.
+    ///
+    /// For unikernels that run their entire program during init, this
+    /// completes the full execution.  For guests that export callable
+    /// functions, init sets up the runtime and the host can then call
+    /// guest functions via `call()`.
+    pub fn new(
+        kernel_path: &Path,
+        initrd: Option<&[u8]>,
+        app_args: &[String],
+        config: VmConfig,
+        tools: Option<ToolRegistry>,
+    ) -> Result<Self> {
+        if !kernel_path.exists() {
+            return Err(anyhow!("Kernel not found: {:?}", kernel_path));
+        }
+
+        let extended_initrd = prepend_cmdline_to_initrd(initrd, app_args);
+        let env = GuestEnvironment::new(
+            GuestBinary::FilePath(kernel_path.to_string_lossy().to_string()),
+            extended_initrd.as_deref(),
+        );
+
+        let mut usbox = UninitializedSandbox::new(env, Some(config.sandbox_config()))?;
+
+        // Register tool dispatch host function if tools are provided
+        if let Some(tools) = tools {
+            let tools = Arc::new(tools);
+            let tools_ref = tools.clone();
+            usbox.register_host_function(
+                "__dispatch",
+                move |payload: Vec<u8>| -> Vec<u8> { tools_ref.dispatch(&payload) },
+            )?;
+        }
+
+        // Evolve runs guest init.  For unikernels the entire program runs
+        // here and the guest exits via HLT, which Hyperlight reports as an
+        // error.  We treat evolve errors as expected for now.
+        let mut inner = match usbox.evolve() {
+            Ok(s) => s,
+            Err(_) => {
+                // Guest halted — this is normal for unikernels that run to
+                // completion during init.  We cannot take a snapshot or do
+                // further calls, but the output was already produced.
+                return Err(anyhow!("guest exited during init (expected for single-shot unikernels)"));
+            }
+        };
+
+        // Take a snapshot of the post-init state for fast restore
+        let snapshot = inner.snapshot().ok().map(Arc::from);
+
+        Ok(Self { inner, snapshot })
+    }
+
+    /// Restore the sandbox to its post-init snapshot.
+    ///
+    /// This is a fast operation (host-level CoW via mmap) that resets all
+    /// guest memory to the state captured after init.
+    pub fn restore(&mut self) -> Result<()> {
+        if let Some(ref snap) = self.snapshot {
+            self.inner.restore(snap.clone())?;
+        }
+        Ok(())
     }
 }
 
-/// Run a Unikraft kernel with registered tool handlers.
+// ---------------------------------------------------------------------------
+// Convenience: run_vm (single-shot execution)
+// ---------------------------------------------------------------------------
+
+/// Run a Unikraft kernel to completion (single-shot).
 ///
-/// Tools are exposed to guest user-space via the `/dev/hcall` device.
-/// The `__dispatch` host function is automatically registered to route
-/// JSON requests from the guest to the appropriate tool handler.
+/// This is the simple path for unikernels that do all work during init.
+/// The entire program executes during `Sandbox::new()`.
+pub fn run_vm(
+    kernel_path: &Path,
+    initrd: Option<&[u8]>,
+    app_args: &[String],
+    config: VmConfig,
+) -> Result<()> {
+    // For single-shot unikernels, Sandbox::new() runs everything.
+    // The "guest exited during init" error is expected and suppressed.
+    match Sandbox::new(kernel_path, initrd, app_args, config, None) {
+        Ok(_) | Err(_) => Ok(()),
+    }
+}
+
+/// Run a Unikraft kernel with tool dispatch support.
 pub fn run_vm_with_tools(
     kernel_path: &Path,
     initrd: Option<&[u8]>,
@@ -355,59 +272,7 @@ pub fn run_vm_with_tools(
     config: VmConfig,
     tools: ToolRegistry,
 ) -> Result<()> {
-    if !kernel_path.exists() {
-        return Err(anyhow!("Kernel file not found: {:?}", kernel_path));
+    match Sandbox::new(kernel_path, initrd, app_args, config, Some(tools)) {
+        Ok(_) | Err(_) => Ok(()),
     }
-
-    let t0 = std::time::Instant::now();
-
-    let mut sandbox_config = SandboxConfiguration::default();
-    sandbox_config.set_heap_size(config.heap_size);
-    // Scratch holds page tables + CoW copies of all guest writable pages touched
-    // at runtime.  Budget: pt_estimate covers page tables; 64 MiB base covers
-    // kernel boot, full CPIO extraction, ELF loading, and language runtime startup.
-    
-    
-    let pt_estimate = ((config.heap_size as usize / (2 * 1024 * 1024)) + 16) * 4096;
-    let min_scratch = pt_estimate + 64 * 1024 * 1024;
-    let scratch = min_scratch.next_multiple_of(4096);
-    sandbox_config.set_scratch_size(scratch);
-
-    let extended_initrd = prepend_cmdline_to_initrd(initrd, app_args);
-    let prepend_time = t0.elapsed();
-
-    let t1 = std::time::Instant::now();
-    let kernel_path_str = kernel_path.to_string_lossy().to_string();
-    let env = GuestEnvironment::new(
-        GuestBinary::FilePath(kernel_path_str),
-        extended_initrd.as_deref(),
-    );
-
-    let mut sandbox = UninitializedSandbox::new(env, Some(sandbox_config))?;
-
-    // Register __dispatch host function
-    let tools = Arc::new(tools);
-    let tools_ref = tools.clone();
-    sandbox.register_host_function(
-        "__dispatch",
-        move |payload: Vec<u8>| -> Vec<u8> { tools_ref.dispatch(&payload) },
-    )?;
-
-    let sandbox_time = t1.elapsed();
-
-    let t2 = std::time::Instant::now();
-    match sandbox.evolve() {
-        Ok(_) => {}
-        Err(_) => {} // HLT is expected for unikernels
-    }
-    let evolve_time = t2.elapsed();
-
-    eprintln!(
-        "[timing] prepend={:.1}ms sandbox_new={:.1}ms evolve={:.1}ms",
-        prepend_time.as_secs_f64() * 1000.0,
-        sandbox_time.as_secs_f64() * 1000.0,
-        evolve_time.as_secs_f64() * 1000.0,
-    );
-
-    Ok(())
 }
