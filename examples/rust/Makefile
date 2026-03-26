@@ -20,6 +20,7 @@ KRAFT_NAME := $(shell grep '^name:' kraft.yaml 2>/dev/null | awk '{print $$2}')
 all: build rootfs run
 
 build:
+	@rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64 .config.$(KRAFT_NAME)_hyperlight-x86_64.old
 	kraft-hyperlight build --plat hyperlight --arch x86_64
 
 rebuild: clean
