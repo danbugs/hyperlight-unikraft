@@ -33,7 +33,7 @@ rootfs: $(INITRD)
 
 $(INITRD): hello.c
 	@echo "Building C binary..."
-	musl-gcc -static-pie -fPIE -o hello hello.c
+	musl-gcc -static-pie -fPIE -fno-stack-protector -o hello hello.c
 	@echo "Creating rootfs..."
 	rm -rf rootfs && mkdir -p rootfs/bin
 	cp hello rootfs/bin/
@@ -47,6 +47,9 @@ run: $(KERNEL) $(INITRD)
 
 run-only:
 	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY)
+
+run-3:
+	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) --repeat 3
 
 benchmark: $(KERNEL) $(INITRD)
 	@echo "Hello C on Hyperlight Benchmark"

@@ -15,7 +15,7 @@ name = "hyperlight-unikraft"
 path = "src/main.rs"
 
 [dependencies]
-hyperlight-host = { git = "https://github.com/danbugs/hyperlight.git", branch = "hyperlight-platform-v0.13.1" }
+hyperlight-host = { path = "/home/danbugs/repos/hyperlight-project/hyperlight/src/hyperlight_host", features = ["executable_heap"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 nix = { version = "0.29", features = ["fs"] }
