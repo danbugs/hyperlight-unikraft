@@ -44,6 +44,8 @@ unikraft:
     # TLS
     CONFIG_LIBCONTEXT: 'y'
     CONFIG_LIBCONTEXT_CLEAR_TBSS: 'y'
+    # Disable per-thread fd table — use global fd table for dispatch compatibility
+    CONFIG_LIBPOSIX_FDTAB_MULTITAB: 'n'
     # Disable paging/vmem - Hyperlight identity-maps all guest memory
     # elfloader implies LIBUKVMEM which selects PAGING; override both
     CONFIG_LIBUKVMEM: 'n'
