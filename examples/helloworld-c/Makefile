@@ -33,7 +33,7 @@ rootfs: $(INITRD)
 
 $(INITRD): hello.c
 	@echo "Building C binary..."
-	musl-gcc -static-pie -fPIE -fno-stack-protector -nostartfiles -o hello hello.c
+	musl-gcc -static-pie -fPIE -fno-stack-protector -o hello hello.c
 	@echo "Creating rootfs..."
 	rm -rf rootfs && mkdir -p rootfs/bin
 	cp hello rootfs/bin/
