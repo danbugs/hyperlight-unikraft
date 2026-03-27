@@ -13,7 +13,7 @@ IMAGE_NAME = go-hyperlight-rootfs
 CONTAINER_NAME = $(IMAGE_NAME)
 KERNEL = .unikraft/build/go-hyperlight_hyperlight-x86_64
 INITRD = hello-initrd.cpio
-MEMORY ?= 512Mi
+MEMORY ?= 16Mi
 BENCHMARK_RUNS ?= 10
 KRAFT_NAME := $(shell grep '^name:' kraft.yaml 2>/dev/null | awk '{print $$2}')
 
@@ -22,11 +22,10 @@ KRAFT_NAME := $(shell grep '^name:' kraft.yaml 2>/dev/null | awk '{print $$2}')
 all: build rootfs run
 
 build:
+	@rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64 .config.$(KRAFT_NAME)_hyperlight-x86_64.old
 	kraft-hyperlight build --plat hyperlight --arch x86_64
 
 rebuild: clean
-	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64
-	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64.old
 	rm -f $(HOME)/.local/share/kraftkit/sources/unikraft/*.tar.gz
 	rm -f $(HOME)/.local/share/kraftkit/sources/apps/elfloader/*.tar.gz
 	kraft-hyperlight build --plat hyperlight --arch x86_64
@@ -52,6 +51,9 @@ run: $(KERNEL) $(INITRD)
 
 run-only:
 	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) -- hello
+
+run-5:
+	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) --repeat 4 -- hello
 
 benchmark: $(KERNEL) $(INITRD)
 	@echo "Go on Hyperlight Benchmark"
@@ -82,3 +84,5 @@ clean:
 	-docker rm -f $(CONTAINER_NAME) 2>/dev/null
 	-docker rmi $(IMAGE_NAME) 2>/dev/null
 	rm -rf .unikraft
+		rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64
+	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64.old

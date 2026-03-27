@@ -48,7 +48,7 @@ run-only:
 	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY)
 
 run-5:
-	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) --repeat 5
+	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) --repeat 4
 
 benchmark: $(KERNEL) $(INITRD)
 	@echo "Hello C on Hyperlight Benchmark"
