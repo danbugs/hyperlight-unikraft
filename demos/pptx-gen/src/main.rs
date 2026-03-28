@@ -11,7 +11,7 @@ use async_openai::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use clap::Parser;
-use hyperlight_unikraft::{parse_memory, run_vm_capture_output, VmConfig, VmOutput};
+use hyperlight_unikraft::{parse_memory, run_vm_capture_output, VmConfig};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{debug, info};
@@ -36,7 +36,7 @@ struct Args {
     rootfs: PathBuf,
 
     /// VM memory allocation
-    #[arg(long, default_value = "512Mi")]
+    #[arg(long, default_value = "1Gi")]
     memory: String,
 
     /// OpenAI model
@@ -307,6 +307,11 @@ fn extract_pptx_from_output(output: &str) -> Result<Vec<u8>> {
         return Ok(decoded);
     }
 
-    debug!("output: {}", output);
-    anyhow::bail!("PPTX_BASE64: marker not found")
+    // Show what we got so the user can diagnose Python errors
+    let preview = if output.len() > 2000 {
+        format!("{}...[truncated, {} bytes total]", &output[..2000], output.len())
+    } else {
+        output.to_string()
+    };
+    anyhow::bail!("PPTX_BASE64: marker not found in VM output:\n{}", preview)
 }
