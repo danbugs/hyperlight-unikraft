@@ -57,6 +57,9 @@ run: $(KERNEL) $(INITRD)
 run-only:
 	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) -- -NoProfile -File $(SCRIPT)
 
+run-5:
+	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) --repeat 4 -- -NoProfile -File $(SCRIPT)	
+
 benchmark: $(KERNEL) $(INITRD)
 	@echo "PowerShell on Hyperlight Benchmark"
 	@echo "Kernel: $(KERNEL)"

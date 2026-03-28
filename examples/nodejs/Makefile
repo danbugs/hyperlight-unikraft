@@ -26,8 +26,6 @@ build:
 	kraft-hyperlight build --plat hyperlight --arch x86_64
 
 rebuild: clean
-	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64
-	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64.old
 	rm -f $(HOME)/.local/share/kraftkit/sources/unikraft/*.tar.gz
 	rm -f $(HOME)/.local/share/kraftkit/sources/apps/elfloader/*.tar.gz
 	kraft-hyperlight build --plat hyperlight --arch x86_64
@@ -53,6 +51,9 @@ run: $(KERNEL) $(INITRD)
 
 run-only:
 	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) -- $(SCRIPT)
+
+run-5:
+	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) --repeat 4 -- $(SCRIPT)
 
 benchmark: $(KERNEL) $(INITRD)
 	@echo "Node.js on Hyperlight Benchmark"
@@ -84,3 +85,5 @@ clean:
 	-docker rm -f $(CONTAINER_NAME) 2>/dev/null
 	-docker rmi $(IMAGE_NAME) 2>/dev/null
 	rm -rf .unikraft
+	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64 
+	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64.old

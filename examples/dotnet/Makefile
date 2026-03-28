@@ -15,7 +15,7 @@ IMAGE_NAME = dotnet-hyperlight-rootfs
 CONTAINER_NAME = $(IMAGE_NAME)
 KERNEL = .unikraft/build/dotnet-hyperlight_hyperlight-x86_64
 INITRD = dotnet-initrd.cpio
-MEMORY ?= 256Mi
+MEMORY ?= 16Mi
 BENCHMARK_RUNS ?= 10
 KRAFT_NAME := $(shell grep '^name:' kraft.yaml 2>/dev/null | awk '{print $$2}')
 
@@ -55,6 +55,9 @@ run: $(KERNEL) $(INITRD)
 
 run-only:
 	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY)
+
+run-5:
+	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) --repeat 4
 
 benchmark: $(KERNEL) $(INITRD)
 	@echo ".NET Runtime on Hyperlight Benchmark"

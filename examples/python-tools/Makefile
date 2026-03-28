@@ -12,12 +12,18 @@ IMAGE_NAME = python-tools-hyperlight-rootfs
 CONTAINER_NAME = $(IMAGE_NAME)
 KERNEL = .unikraft/build/python-tools-hyperlight_hyperlight-x86_64
 INITRD = initrd.cpio
-MEMORY ?= 256Mi
+MEMORY ?= 32Mi
 SCRIPT ?= /test_tools.py
+KRAFT_NAME := $(shell grep '^name:' kraft.yaml 2>/dev/null | awk '{print $$2}')
 
 .PHONY: all build rootfs run run-only clean
 
 all: build rootfs run
+
+rebuild: clean
+	rm -f $(HOME)/.local/share/kraftkit/sources/unikraft/*.tar.gz
+	rm -f $(HOME)/.local/share/kraftkit/sources/apps/elfloader/*.tar.gz
+	kraft-hyperlight build --plat hyperlight --arch x86_64
 
 # Build the Unikraft kernel using kraft
 build:
@@ -50,9 +56,14 @@ run: $(KERNEL) $(INITRD)
 run-only:
 	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) --enable-tools -- $(SCRIPT)
 
+run-5:
+	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY) --repeat 4 --enable-tools -- $(SCRIPT)		
+
 # Clean up
 clean:
 	rm -rf rootfs $(INITRD)
 	-docker rm -f $(CONTAINER_NAME) 2>/dev/null
 	-docker rmi $(IMAGE_NAME) 2>/dev/null
 	rm -rf .unikraft
+	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64
+	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64.old

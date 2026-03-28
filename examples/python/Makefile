@@ -99,4 +99,4 @@ clean:
 	-docker rmi $(IMAGE_NAME) 2>/dev/null
 	rm -rf .unikraft
 	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64
-	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64.old	
+	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64.old

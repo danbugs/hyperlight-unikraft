@@ -15,7 +15,7 @@
 
 KERNEL = .unikraft/build/dotnet-nativeaot-hyperlight_hyperlight-x86_64
 INITRD = hello-initrd.cpio
-MEMORY ?= 64Mi
+MEMORY ?= 16Mi
 DOTNET_BINARY = bin/Release/net9.0/linux-musl-x64/publish/HelloNativeAot
 BENCHMARK_RUNS ?= 10
 KRAFT_NAME := $(shell grep '^name:' kraft.yaml 2>/dev/null | awk '{print $$2}')
@@ -29,8 +29,6 @@ build:
 	kraft-hyperlight build --plat hyperlight --arch x86_64
 
 rebuild: clean
-	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64
-	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64.old
 	rm -f $(HOME)/.local/share/kraftkit/sources/unikraft/*.tar.gz
 	rm -f $(HOME)/.local/share/kraftkit/sources/apps/elfloader/*.tar.gz
 	kraft-hyperlight build --plat hyperlight --arch x86_64
@@ -53,6 +51,9 @@ run: $(KERNEL) $(INITRD)
 
 run-only:
 	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --memory $(MEMORY)
+
+run-5:
+	hyperlight-unikraft $(KERNEL) --initrd $(INITRD) --repeat 4 --memory $(MEMORY)	
 
 benchmark: $(KERNEL) $(INITRD)
 	@echo ".NET NativeAOT on Hyperlight Benchmark"
@@ -80,3 +81,5 @@ benchmark: $(KERNEL) $(INITRD)
 
 clean:
 	rm -rf rootfs $(INITRD) bin obj .unikraft
+	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64
+	rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64.old
