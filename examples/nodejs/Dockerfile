@@ -2,6 +2,10 @@
 # Based on Unikraft catalog's minimal Alpine approach
 
 FROM node:22-alpine AS node
+RUN apk add --no-cache binutils && \
+    strip --strip-all /usr/local/bin/node && \
+    strip --strip-unneeded /usr/lib/libstdc++.so.6 && \
+    strip --strip-unneeded /usr/lib/libgcc_s.so.1
 
 FROM alpine:3 AS sys
 

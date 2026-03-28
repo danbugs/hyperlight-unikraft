@@ -11,7 +11,7 @@ unikraft:
     CONFIG_LIBUKINTCTLR_HYPERLIGHT: 'y'
     CONFIG_HYPERLIGHT_MAX_GUEST_LOG_LEVEL: 4
 
-    # Suppress all kernel logging (compile-time filtering)
+    # Suppress kernel logging (compile-time filtering)
     CONFIG_LIBUKPRINT_KLVL_CRIT: 'y'
     CONFIG_LIBUKPRINT_PRINT_TIME: 'n'
     CONFIG_LIBUKPRINT_PRINT_SRCNAME: 'n'
@@ -21,12 +21,15 @@ unikraft:
     CONFIG_OPTIMIZE_SIZE: 'y'
     CONFIG_OPTIMIZE_PIE: 'y'
 
-    # VFS and initrd support
+    # VFS: cpiovfs for zero-copy initrd mount (avoids 112MB ramfs calloc)
     CONFIG_LIBVFSCORE: 'y'
     CONFIG_LIBVFSCORE_AUTOMOUNT_CI: 'y'
-    CONFIG_LIBVFSCORE_AUTOMOUNT_CI_INITRD: 'y'
-    CONFIG_LIBRAMFS: 'y'
-    CONFIG_LIBUKCPIO: 'y'
+    CONFIG_LIBVFSCORE_AUTOMOUNT_CI_CUSTOM: 'y'
+    CONFIG_LIBVFSCORE_AUTOMOUNT_CI0_DEV: 'initrd0'
+    CONFIG_LIBVFSCORE_AUTOMOUNT_CI0_DRIVER: 'cpiovfs'
+    CONFIG_LIBVFSCORE_AUTOMOUNT_CI0_MP: '/'
+    CONFIG_LIBVFSCORE_AUTOMOUNT_CI0_UKOPTS_IFINITRD0: 'y'
+    CONFIG_LIBCPIOVFS: 'y'
 
     # ELF loader - execute Node binary, script passed via cmdline
     CONFIG_APPELFLOADER: 'y'
@@ -46,7 +49,8 @@ unikraft:
     CONFIG_LIBUKBOOT_MAINTHREAD: 'y'
     CONFIG_LIBPOSIX_PROCESS_ARCH_PRCTL: 'y'
     CONFIG_LIBPOSIX_PROCESS_MULTITHREADING: 'y'
-    CONFIG_LIBPOSIX_PROCESS_SIGNAL: 'y'
+    # Signal stubs are sufficient for Hyperlight (no signal delivery)
+    # CONFIG_LIBPOSIX_PROCESS_SIGNAL: 'y'
     CONFIG_LIBPOSIX_FUTEX: 'y'
     CONFIG_LIBUKSCHED: 'y'
     CONFIG_LIBUKSCHEDCOOP: 'y'
