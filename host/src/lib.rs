@@ -55,10 +55,13 @@ impl VmConfig {
         cfg.set_heap_size(self.heap_size);
 
         // Scratch holds page tables + CoW copies of writable pages touched at
-        // runtime.  pt_estimate covers page tables; 64 MiB base covers kernel
+        // runtime.  pt_estimate covers page tables; the base covers kernel
         // boot, CPIO extraction, ELF loading, and language runtime startup.
+        // Use 25% of heap as base: large guests (e.g. Node.js) load 100+ MB
+        // ELF binaries whose PT_LOAD segments trigger per-page CoW copies.
         let pt_estimate = ((self.heap_size as usize / (2 * 1024 * 1024)) + 16) * PAGE_SIZE;
-        let scratch = (pt_estimate + 64 * 1024 * 1024).next_multiple_of(PAGE_SIZE);
+        let base = std::cmp::max(self.heap_size as usize / 4, 64 * 1024 * 1024);
+        let scratch = (pt_estimate + base).next_multiple_of(PAGE_SIZE);
         cfg.set_scratch_size(scratch);
         cfg
     }
