@@ -12,8 +12,10 @@ use hyperlight_host::sandbox::SandboxConfiguration;
 use hyperlight_host::sandbox::snapshot::Snapshot;
 use hyperlight_host::{GuestBinary, MultiUseSandbox, UninitializedSandbox};
 use std::collections::HashMap;
+use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Magic header for cmdline embedded in initrd: "HLCMDLN\0"
 const CMDLINE_MAGIC: &[u8; 8] = b"HLCMDLN\0";
@@ -282,4 +284,69 @@ pub fn run_vm_with_tools(
 ) -> Result<()> {
     let _ = Sandbox::new(kernel_path, initrd, app_args, config, Some(tools))?;
     Ok(())
+}
+
+/// Output captured from a VM execution.
+pub struct VmOutput {
+    pub output: String,
+    pub setup_time: Duration,
+    pub evolve_time: Duration,
+}
+
+/// Run a Unikraft kernel and capture its console output.
+///
+/// Unikraft console output goes through Hyperlight's port I/O to host stderr.
+/// This function redirects stderr to a temp file during the call phase to
+/// capture it.  The Unikraft dispatch lifecycle is:
+///   evolve (boot+init+snapshot) → restore → call_run (app output here)
+pub fn run_vm_capture_output(
+    kernel_path: &Path,
+    initrd: Option<&[u8]>,
+    app_args: &[String],
+    config: VmConfig,
+) -> Result<VmOutput> {
+    let setup_start = std::time::Instant::now();
+
+    // Phase 1: evolve — boots the kernel and takes a post-init snapshot.
+    // No application output happens here.
+    let mut sandbox = Sandbox::new(kernel_path, initrd, app_args, config, None)?;
+    let setup_time = setup_start.elapsed();
+
+    // Redirect stderr to a temp file before the call phase
+    let capture_file = std::env::temp_dir().join(format!("hl-capture-{}", std::process::id()));
+    let capture_fd = {
+        use std::os::fd::IntoRawFd;
+        std::fs::File::create(&capture_file)?.into_raw_fd()
+    };
+    let original_stderr = nix::unistd::dup(2)?;
+    nix::unistd::dup2(capture_fd, 2)?;
+    nix::unistd::close(capture_fd)?;
+
+    // Phase 2: restore + call — application runs and produces output
+    let evolve_start = std::time::Instant::now();
+    sandbox.restore()?;
+    let call_result = sandbox.call_run();
+    let evolve_time = evolve_start.elapsed();
+
+    // Restore stderr
+    nix::unistd::dup2(original_stderr.as_raw_fd(), 2)?;
+
+    // Read captured output
+    let captured = std::fs::read(&capture_file).unwrap_or_default();
+    let _ = std::fs::remove_file(&capture_file);
+    let captured = String::from_utf8_lossy(&captured).into_owned();
+
+    if let Err(e) = call_result {
+        return Err(anyhow!(
+            "VM call failed: {}\n--- captured output ---\n{}",
+            e,
+            captured
+        ));
+    }
+
+    Ok(VmOutput {
+        output: captured,
+        setup_time,
+        evolve_time,
+    })
 }
