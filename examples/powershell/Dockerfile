@@ -6,7 +6,12 @@ RUN apk add --no-cache curl jq
 RUN curl -L -o /tmp/powershell.tar.gz \
     https://github.com/PowerShell/PowerShell/releases/download/v7.5.4/powershell-7.5.4-linux-musl-x64.tar.gz
 RUN mkdir -p /opt/microsoft/powershell/7 && \
-    tar -xzf /tmp/powershell.tar.gz -C /opt/microsoft/powershell/7
+    tar -xzf /tmp/powershell.tar.gz -C /opt/microsoft/powershell/7 && \
+    cd /opt/microsoft/powershell/7 && \
+    rm -rf ref/ Schemas/ && \
+    rm -rf ru/ ja/ pl/ ko/ fr/ de/ it/ es/ pt-BR/ tr/ cs/ zh-Hans/ zh-Hant/ && \
+    rm -f *.xml && \
+    rm -rf Modules/PSReadLine Modules/PackageManagement Modules/PSResourceGet
 # Enable invariant globalization (no ICU dependency)
 RUN jq '.runtimeOptions.configProperties["System.Globalization.Invariant"] = true' \
     /opt/microsoft/powershell/7/pwsh.runtimeconfig.json > /tmp/runtimeconfig.json && \
