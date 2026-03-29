@@ -12,7 +12,7 @@ IMAGE_NAME = python-tools-hyperlight-rootfs
 CONTAINER_NAME = $(IMAGE_NAME)
 KERNEL = .unikraft/build/python-tools-hyperlight_hyperlight-x86_64
 INITRD = initrd.cpio
-MEMORY ?= 32Mi
+MEMORY ?= 64Mi
 SCRIPT ?= /test_tools.py
 KRAFT_NAME := $(shell grep '^name:' kraft.yaml 2>/dev/null | awk '{print $$2}')
 

@@ -36,7 +36,7 @@ struct Args {
     rootfs: PathBuf,
 
     /// VM memory allocation
-    #[arg(long, default_value = "1Gi")]
+    #[arg(long, default_value = "2Gi")]
     memory: String,
 
     /// OpenAI model
