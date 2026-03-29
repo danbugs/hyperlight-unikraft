@@ -41,10 +41,11 @@ RUN set -xe ; \
 	find /usr/local -type f -name "*.so" | ldconfig ; \
 	find /usr/local -depth \
 	\( \
-		\( -type d -a \( -name test -o -name tests -o -name __pycache__ \) \) \
+		\( -type d -a \( -name test -o -name tests \) \) \
 			-o \
-		\( -type f -a \( -name '*.pyc' -o -name '*.pyo' -o -name '*.exe' \) \) \
-	\) -exec rm -rf '{}' +;
+		\( -type f -a \( -name '*.pyo' -o -name '*.exe' \) \) \
+	\) -exec rm -rf '{}' + ; \
+	python3 -m compileall -q /usr/local/lib/python*/
 
 RUN set -xe ; \
 	rm -fr /usr/local/lib/python*/config-* ; \
