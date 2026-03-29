@@ -13,7 +13,7 @@ IMAGE_NAME = go-hyperlight-rootfs
 CONTAINER_NAME = $(IMAGE_NAME)
 KERNEL = .unikraft/build/go-hyperlight_hyperlight-x86_64
 INITRD = hello-initrd.cpio
-MEMORY ?= 16Mi
+MEMORY ?= 8Mi
 BENCHMARK_RUNS ?= 10
 KRAFT_NAME := $(shell grep '^name:' kraft.yaml 2>/dev/null | awk '{print $$2}')
 
