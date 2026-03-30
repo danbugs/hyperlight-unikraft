@@ -22,6 +22,11 @@ const CMDLINE_MAGIC: &[u8; 8] = b"HLCMDLN\0";
 
 const PAGE_SIZE: usize = 4096;
 
+/// Guest VA for the initrd mapped via map_file_cow.
+/// Computed dynamically in new_with_file_initrd to be after the
+/// primary shared memory region, page-aligned.
+/// Falls back to 2 GiB if the sandbox config doesn't have heap info.
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -92,6 +97,30 @@ pub fn parse_memory(mem_str: &str) -> Result<u64> {
 // ---------------------------------------------------------------------------
 // Initrd cmdline prepend
 // ---------------------------------------------------------------------------
+
+/// Build init_data with cmdline + mapped initrd size (for map_file_cow mode).
+/// The mapped file size is stored in the last 8 bytes of the page-aligned header.
+fn build_cmdline_initdata(app_args: &[String], mapped_initrd_size: u64) -> Option<Vec<u8>> {
+    let cmdline = app_args.join(" ");
+    if cmdline.is_empty() && mapped_initrd_size == 0 {
+        return None;
+    }
+
+    let cmdline_bytes = cmdline.as_bytes();
+    let cmdline_len = cmdline_bytes.len() as u32;
+    let header_size = 8 + 4 + cmdline_len as usize + 1;
+    let padded = (header_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+
+    let mut buf = Vec::with_capacity(padded);
+    buf.extend_from_slice(CMDLINE_MAGIC);
+    buf.extend_from_slice(&cmdline_len.to_le_bytes());
+    buf.extend_from_slice(cmdline_bytes);
+    buf.push(0);
+    // Pad to page boundary minus 8, then append mapped size
+    buf.resize(padded - 8, 0);
+    buf.extend_from_slice(&mapped_initrd_size.to_le_bytes());
+    Some(buf)
+}
 
 /// Prepend application arguments as a cmdline header in the initrd.
 pub fn prepend_cmdline_to_initrd(initrd: Option<&[u8]>, app_args: &[String]) -> Option<Vec<u8>> {
@@ -179,6 +208,10 @@ pub struct Sandbox {
     inner: MultiUseSandbox,
     /// Post-init snapshot for fast restore between calls.
     snapshot: Option<Arc<Snapshot>>,
+    /// File mapping to re-register after snapshot restore.
+    /// Snapshot restore unmaps all non-snapshot regions.
+    file_mapping_path: Option<std::path::PathBuf>,
+    file_mapping_base: u64,
 }
 
 impl Sandbox {
@@ -217,19 +250,79 @@ impl Sandbox {
             )?;
         }
 
-        // Evolve runs the guest.  The unikernel boots, runs the application,
-        // then signals readiness via outb(108) with the dispatch function
-        // address in RAX.  This satisfies Hyperlight's init protocol and
-        // returns a MultiUseSandbox ready for call/snapshot/restore.
+        Self::finish_evolve(usbox, None, 0)
+    }
+
+    /// Create a new sandbox with initrd mapped via zero-copy CoW file mapping.
+    ///
+    /// Instead of copying the initrd into snapshot memory, maps the file
+    /// directly into guest address space at INITRD_MAP_BASE. The guest's
+    /// demand-paging handler creates page table entries on first access.
+    pub fn new_with_file_initrd(
+        kernel_path: &Path,
+        initrd_path: Option<&Path>,
+        app_args: &[String],
+        config: VmConfig,
+        tools: Option<ToolRegistry>,
+    ) -> Result<Self> {
+        if !kernel_path.exists() {
+            return Err(anyhow!("Kernel not found: {:?}", kernel_path));
+        }
+
+        // Get file size before creating sandbox
+        let mapped_size = match initrd_path {
+            Some(path) if path.exists() => std::fs::metadata(path)?.len(),
+            Some(path) => return Err(anyhow!("Initrd not found: {:?}", path)),
+            None => 0,
+        };
+
+        // Build init_data with cmdline + mapped file size
+        let cmdline_data = build_cmdline_initdata(app_args, mapped_size);
+        let env = GuestEnvironment::new(
+            GuestBinary::FilePath(kernel_path.to_string_lossy().to_string()),
+            cmdline_data.as_deref(),
+        );
+
+        let mut usbox = UninitializedSandbox::new(env, Some(config.sandbox_config()))?;
+
+        // Map the initrd file (zero-copy via mmap)
+        // Place at 3 GiB — high enough to not overlap any reasonable
+        // primary shared memory region, within the 4 GiB identity map.
+        const INITRD_MAP_BASE: u64 = 0xC000_0000; // 3 GiB
+        if let Some(path) = initrd_path {
+            usbox.map_file_cow(path, INITRD_MAP_BASE, Some("initrd"))?;
+        }
+
+        // Register tool dispatch if needed
+        if let Some(tools) = tools {
+            let tools = Arc::new(tools);
+            let tools_ref = tools.clone();
+            usbox.register_host_function(
+                "__dispatch",
+                move |payload: Vec<u8>| -> Vec<u8> { tools_ref.dispatch(&payload) },
+            )?;
+        }
+
+        Self::finish_evolve(
+            usbox,
+            initrd_path.map(|p| p.to_path_buf()),
+            INITRD_MAP_BASE,
+        )
+    }
+
+    fn finish_evolve(
+        usbox: UninitializedSandbox,
+        file_mapping_path: Option<std::path::PathBuf>,
+        file_mapping_base: u64,
+    ) -> Result<Self> {
         let mut inner = usbox.evolve()?;
-
-        // Take a snapshot of the post-init state for fast restore.
-        // This captures the fully-booted kernel + completed application.
-        // Future: snapshot should be taken BEFORE the application runs
-        // (requires deferred execution in the elfloader).
         let snapshot = inner.snapshot().ok();
-
-        Ok(Self { inner, snapshot })
+        Ok(Self {
+            inner,
+            snapshot,
+            file_mapping_path,
+            file_mapping_base,
+        })
     }
 
     /// Restore the sandbox to its post-init snapshot.
@@ -239,6 +332,11 @@ impl Sandbox {
     pub fn restore(&mut self) -> Result<()> {
         if let Some(ref snap) = self.snapshot {
             self.inner.restore(snap.clone())?;
+        }
+        // Re-register file mapping after restore (snapshot restore
+        // unmaps all non-snapshot regions including file mappings)
+        if let Some(ref path) = self.file_mapping_path {
+            self.inner.map_file_cow(path, self.file_mapping_base, Some("initrd"))?;
         }
         Ok(())
     }

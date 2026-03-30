@@ -63,11 +63,6 @@ fn main() -> Result<()> {
         eprintln!("Memory: {heap_size} B, Stack: {stack_size} B");
     }
 
-    let initrd_mmap = args.initrd.as_ref().map(|p| {
-        let f = std::fs::File::open(p).expect("open initrd");
-        unsafe { memmap2::Mmap::map(&f).expect("mmap initrd") }
-    });
-
     let config = VmConfig::default()
         .with_heap_size(heap_size)
         .with_stack_size(stack_size);
@@ -81,9 +76,10 @@ fn main() -> Result<()> {
     };
 
     // Phase 1: evolve — boots kernel, loads ELF, signals ready
-    let mut sandbox = Sandbox::new(
+    // Use map_file_cow for zero-copy initrd mapping
+    let mut sandbox = Sandbox::new_with_file_initrd(
         &args.kernel,
-        initrd_mmap.as_deref(),
+        args.initrd.as_deref(),
         &args.app_args,
         config,
         tools,
