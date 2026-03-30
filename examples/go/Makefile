@@ -16,6 +16,7 @@ INITRD = hello-initrd.cpio
 MEMORY ?= 16Mi
 BENCHMARK_RUNS ?= 10
 KRAFT_NAME := $(shell grep '^name:' kraft.yaml 2>/dev/null | awk '{print $$2}')
+UNIKRAFT_BRANCH := $(shell grep 'version:' kraft.yaml | head -1 | awk '{print $$2}')
 
 .PHONY: all build rootfs run run-only benchmark rebuild clean
 
@@ -25,10 +26,18 @@ build:
 	@rm -f .config.$(KRAFT_NAME)_hyperlight-x86_64 .config.$(KRAFT_NAME)_hyperlight-x86_64.old
 	kraft-hyperlight build --plat hyperlight --arch x86_64
 
+fix-sources:
+	@rm -rf .unikraft/unikraft .unikraft/apps/elfloader
+	@git clone --branch $(UNIKRAFT_BRANCH) --depth 1 https://github.com/danbugs/unikraft.git .unikraft/unikraft 2>/dev/null || true
+	@git clone --branch $(UNIKRAFT_BRANCH) --depth 1 https://github.com/danbugs/app-elfloader.git .unikraft/apps/elfloader 2>/dev/null || true
+
 rebuild: clean
 	rm -f $(HOME)/.local/share/kraftkit/sources/unikraft/*.tar.gz
 	rm -f $(HOME)/.local/share/kraftkit/sources/apps/elfloader/*.tar.gz
 	kraft-hyperlight build --plat hyperlight --arch x86_64
+	$(MAKE) fix-sources
+	rm -rf .unikraft/build
+	$(MAKE) build
 
 rootfs: $(INITRD)
 
