@@ -27,17 +27,19 @@ all: build rootfs run
 
 build:
 	rm -f .config.powershell-hyperlight_hyperlight-x86_64
-	kraft-hyperlight build --plat hyperlight --arch x86_64
+	-kraft-hyperlight build --plat hyperlight --arch x86_64
 
 fix-sources:
+	@mkdir -p .unikraft/apps .unikraft/libs
 	@rm -rf .unikraft/unikraft .unikraft/apps/elfloader
 	@git clone --branch $(UNIKRAFT_BRANCH) --depth 1 https://github.com/danbugs/unikraft.git .unikraft/unikraft 2>/dev/null || true
 	@git clone --branch $(UNIKRAFT_BRANCH) --depth 1 https://github.com/danbugs/app-elfloader.git .unikraft/apps/elfloader 2>/dev/null || true
+	@git clone --branch staging --depth 1 https://github.com/unikraft/lib-libelf.git .unikraft/libs/libelf 2>/dev/null || true
 
 rebuild: clean
 	rm -f $(HOME)/.local/share/kraftkit/sources/unikraft/*.tar.gz
 	rm -f $(HOME)/.local/share/kraftkit/sources/apps/elfloader/*.tar.gz
-	kraft-hyperlight build --plat hyperlight --arch x86_64
+	-kraft-hyperlight build --plat hyperlight --arch x86_64
 	$(MAKE) fix-sources
 	rm -rf .unikraft/build
 	$(MAKE) build
