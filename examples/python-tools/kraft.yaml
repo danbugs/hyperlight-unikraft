@@ -4,10 +4,12 @@ name: python-tools-hyperlight
 
 unikraft:
   source: https://github.com/danbugs/unikraft.git
-  version: hyperlight-platform-v0.13.1
+  version: hyperlight-platform-v0.13.1-rebased
   kconfig:
     # Platform
     CONFIG_PLAT_HYPERLIGHT: 'y'
+    CONFIG_PAGING: 'n'
+    CONFIG_LIBUKVMEM: 'n'
     CONFIG_LIBUKINTCTLR_HYPERLIGHT: 'y'
     CONFIG_HYPERLIGHT_MAX_GUEST_LOG_LEVEL: 4
 
@@ -58,14 +60,11 @@ unikraft:
     CONFIG_LIBUKMPI: 'y'
     CONFIG_LIBUKMMAP: 'y'
 
-    # elfloader implies LIBUKVMEM which selects PAGING; override both
-    CONFIG_LIBUKVMEM: 'n'
-    CONFIG_PAGING: 'n'
 
 libraries:
   app-elfloader:
     source: https://github.com/danbugs/app-elfloader.git
-    version: hyperlight-platform-v0.13.1
+    version: hyperlight-platform-v0.13.1-rebased
   libelf:
     source: https://github.com/unikraft/lib-libelf.git
     version: staging
