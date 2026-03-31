@@ -34,7 +34,21 @@ rebuild: clean
 	-kraft-hyperlight build --plat hyperlight --arch x86_64
 	$(MAKE) fix-sources
 	rm -rf .unikraft/build
-	$(MAKE) build
+	-kraft-hyperlight build --plat hyperlight --arch x86_64
+	@if [ ! -f ".unikraft/build/python-tools-hyperlight_hyperlight-x86_64" ]; then \
+		echo "kraft failed in-tree, building from temp dir..."; \
+		ORIG="$$(pwd)"; \
+		TMP=$$(mktemp -d); \
+		cp kraft.yaml $$TMP/; \
+		mkdir -p $$TMP/.unikraft; \
+		cp -r .unikraft/unikraft $$TMP/.unikraft/unikraft 2>/dev/null; \
+		cp -r .unikraft/apps $$TMP/.unikraft/apps 2>/dev/null; \
+		cp -r .unikraft/libs $$TMP/.unikraft/libs 2>/dev/null; \
+		cd $$TMP && kraft-hyperlight build --plat hyperlight --arch x86_64; \
+		rm -rf $$ORIG/.unikraft/build; \
+		cp -r $$TMP/.unikraft/build $$ORIG/.unikraft/build; \
+		rm -rf $$TMP; \
+	fi
 
 # Build the Unikraft kernel using kraft
 build:
