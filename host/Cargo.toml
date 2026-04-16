@@ -18,6 +18,15 @@ path = "src/main.rs"
 hyperlight-host = { version = "0.14.0", features = ["executable_heap"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
-nix = { version = "0.29", features = ["fs"] }
 memmap2 = "0.9"
 serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_Storage_FileSystem",
+] }

@@ -4,6 +4,7 @@
 //! manages the kernel lifecycle: create → evolve (init) → snapshot → call.
 
 pub mod ffi;
+pub mod stderr_capture;
 
 use anyhow::{anyhow, Result};
 use hyperlight_host::func::Registerable;
@@ -12,7 +13,6 @@ use hyperlight_host::sandbox::SandboxConfiguration;
 use hyperlight_host::sandbox::snapshot::Snapshot;
 use hyperlight_host::{GuestBinary, MultiUseSandbox, UninitializedSandbox};
 use std::collections::HashMap;
-use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -412,13 +412,7 @@ pub fn run_vm_capture_output(
 
     // Redirect stderr to a temp file before the call phase
     let capture_file = std::env::temp_dir().join(format!("hl-capture-{}", std::process::id()));
-    let capture_fd = {
-        use std::os::fd::IntoRawFd;
-        std::fs::File::create(&capture_file)?.into_raw_fd()
-    };
-    let original_stderr = nix::unistd::dup(2)?;
-    nix::unistd::dup2(capture_fd, 2)?;
-    nix::unistd::close(capture_fd)?;
+    let capture = stderr_capture::Capture::redirect_to_file(&capture_file)?;
 
     // Phase 2: restore + call — application runs and produces output
     let evolve_start = std::time::Instant::now();
@@ -427,7 +421,7 @@ pub fn run_vm_capture_output(
     let evolve_time = evolve_start.elapsed();
 
     // Restore stderr
-    nix::unistd::dup2(original_stderr.as_raw_fd(), 2)?;
+    capture.restore()?;
 
     // Read captured output
     let captured = std::fs::read(&capture_file).unwrap_or_default();

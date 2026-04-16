@@ -220,8 +220,7 @@ fn run_vm_on_thread(
     stack_size: u64,
     output: &Arc<Mutex<String>>,
 ) -> anyhow::Result<()> {
-    use std::io::{Read as _, Write as _};
-    use std::os::unix::io::AsRawFd;
+    use std::io::Write as _;
 
     let path = Path::new(kernel_path);
     if !path.exists() {
@@ -239,34 +238,24 @@ fn run_vm_on_thread(
 
     let sandbox = UninitializedSandbox::new(env, Some(sandbox_config))?;
 
-    // Capture stderr: Unikraft console outputs via port I/O which Hyperlight
-    // writes to stderr using eprint!. We redirect stderr to a pipe on this
-    // thread to capture it.
-    let (read_fd, write_fd) = nix::unistd::pipe()?;
-    let original_stderr = nix::unistd::dup(2)?;
-    nix::unistd::dup2(write_fd.as_raw_fd(), 2)?;
+    // Capture stderr to a temp file while the VM runs. Unikraft console output
+    // goes through Hyperlight's `eprint!` → process stderr. See
+    // stderr_capture module for the platform-specific redirect.
+    let capture_file = std::env::temp_dir()
+        .join(format!("hl-ffi-capture-{}-{:p}", std::process::id(), output));
+    let capture = crate::stderr_capture::Capture::redirect_to_file(&capture_file)?;
 
     // Evolve runs the unikernel to completion (blocks until HLT)
     match sandbox.evolve() {
         Ok(_) | Err(_) => {} // HLT is expected for unikernels
     }
 
-    // Restore stderr and read captured output
     std::io::stderr().flush().ok();
-    nix::unistd::dup2(original_stderr.as_raw_fd(), 2)?;
-    let _ = original_stderr;
-    let _ = write_fd;
+    capture.restore()?;
 
-    let mut captured = String::new();
-    let mut reader = std::fs::File::from(read_fd);
-    let flags = nix::fcntl::fcntl(reader.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFL)?;
-    nix::fcntl::fcntl(
-        reader.as_raw_fd(),
-        nix::fcntl::FcntlArg::F_SETFL(
-            nix::fcntl::OFlag::from_bits_truncate(flags) | nix::fcntl::OFlag::O_NONBLOCK,
-        ),
-    )?;
-    reader.read_to_string(&mut captured).ok();
+    let captured = std::fs::read(&capture_file).unwrap_or_default();
+    let _ = std::fs::remove_file(&capture_file);
+    let captured = String::from_utf8_lossy(&captured).into_owned();
 
     if let Ok(mut buf) = output.lock() {
         *buf = captured;
