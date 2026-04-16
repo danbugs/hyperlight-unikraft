@@ -76,10 +76,12 @@ fn main() -> Result<()> {
     };
 
     // Phase 1: evolve — boots kernel, loads ELF, signals ready
-    // Use map_file_cow for zero-copy initrd mapping
-    let mut sandbox = Sandbox::new_with_file_initrd(
+    // On Windows, use in-memory initrd (Sandbox::new) to avoid map_file_cow
+    // demand-paging issues with WHP. On Linux, use the zero-copy file mapping.
+    let initrd_data = args.initrd.as_deref().map(std::fs::read).transpose()?;
+    let mut sandbox = Sandbox::new(
         &args.kernel,
-        args.initrd.as_deref(),
+        initrd_data.as_deref(),
         &args.app_args,
         config,
         tools,
