@@ -26,7 +26,7 @@ run-5:
 # Build rootfs via Docker (no host cpio/musl-gcc needed)
 rootfs:
     docker build --platform linux/amd64 --target cpio -t {{image}}-cpio .
-    docker rm -f {{image}}-tmp || true
+    - docker rm -f {{image}}-tmp
     docker create --name {{image}}-tmp {{image}}-cpio /bin/true
     docker cp {{image}}-tmp:/output.cpio ./{{initrd}}
     docker rm -f {{image}}-tmp
