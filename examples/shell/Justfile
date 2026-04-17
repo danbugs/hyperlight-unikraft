@@ -8,6 +8,7 @@
 # just clean    - Remove build artifacts
 
 set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
+export DOCKER_BUILDKIT := "0"
 
 kernel    := ".unikraft/build/shell-hyperlight_hyperlight-x86_64"
 initrd    := "initrd.cpio"
