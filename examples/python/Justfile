@@ -3,17 +3,17 @@
 # just run      - Run once
 # just run-5    - Run 5x (snapshot/restore)
 # just rootfs   - Build rootfs via Docker (cross-platform)
-# just build    - Build Unikraft kernel via kraft
-# just rebuild  - Clean and rebuild kernel + rootfs
+# just build    - Build/pull kernel
 # just clean    - Remove build artifacts
 
 set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 export DOCKER_BUILDKIT := "0"
 
-kernel    := ".unikraft/build/python-hyperlight_hyperlight-x86_64"
-initrd    := "initrd.cpio"
-memory    := "96Mi"
-image     := "python-hyperlight"
+kernel      := ".unikraft/build/python-hyperlight_hyperlight-x86_64"
+initrd      := "initrd.cpio"
+memory      := "96Mi"
+image       := "python-hyperlight"
+ghcr_kernel := "ghcr.io/danbugs/hyperlight-unikraft/python-kernel:latest"
 
 # Run the example
 run:
@@ -23,7 +23,7 @@ run:
 run-5:
     hyperlight-unikraft {{kernel}} --initrd {{initrd}} --repeat 4 --memory {{memory}} -- /hello.py
 
-# Build rootfs via Docker (no host cpio/musl-gcc needed)
+# Build rootfs via Docker (cross-platform)
 rootfs:
     docker build --platform linux/amd64 --target cpio -t {{image}}-cpio .
     - docker rm -f {{image}}-tmp
@@ -31,12 +31,20 @@ rootfs:
     docker cp {{image}}-tmp:/output.cpio ./{{initrd}}
     docker rm -f {{image}}-tmp
 
-# Build Unikraft kernel via kraft
+# Build kernel via kraft (Linux)
+[unix]
 build:
     -kraft-hyperlight build --plat hyperlight --arch x86_64
 
-# Full clean rebuild
-rebuild: clean build rootfs
+# Pull pre-built kernel from GHCR (Windows)
+[windows]
+build:
+    docker pull {{ghcr_kernel}}
+    - docker rm -f {{image}}-kernel-tmp
+    docker create --name {{image}}-kernel-tmp {{ghcr_kernel}}
+    New-Item -ItemType Directory -Force -Path (Split-Path {{kernel}}) | Out-Null
+    docker cp {{image}}-kernel-tmp:/kernel ./{{kernel}}
+    docker rm -f {{image}}-kernel-tmp
 
 # Clean build artifacts
 [unix]

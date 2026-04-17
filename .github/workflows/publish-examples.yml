@@ -1,0 +1,115 @@
+name: Publish kernels and runtime bases to GHCR
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'examples/**'
+      - 'runtimes/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # Publish base runtime images (interpreted languages)
+  publish-bases:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        runtime: [python, nodejs, dotnet, powershell, shell]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push base image
+        run: |
+          IMAGE=${{ env.IMAGE_BASE }}/${{ matrix.runtime }}-base:latest
+          docker build --platform linux/amd64 \
+            -f runtimes/${{ matrix.runtime }}.Dockerfile \
+            -t $IMAGE runtimes/
+          docker push $IMAGE
+
+  # Build and publish kernels for each example
+  publish-kernels:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        example:
+          - name: helloworld-c
+            kernel: helloworld-hyperlight_hyperlight-x86_64
+          - name: rust
+            kernel: rust-hyperlight_hyperlight-x86_64
+          - name: go
+            kernel: go-hyperlight_hyperlight-x86_64
+          - name: shell
+            kernel: shell-hyperlight_hyperlight-x86_64
+          - name: python
+            kernel: python-hyperlight_hyperlight-x86_64
+          - name: nodejs
+            kernel: nodejs-hyperlight_hyperlight-x86_64
+          - name: dotnet
+            kernel: dotnet-hyperlight_hyperlight-x86_64
+          - name: dotnet-nativeaot
+            kernel: dotnet-nativeaot-hyperlight_hyperlight-x86_64
+          - name: powershell
+            kernel: powershell-hyperlight_hyperlight-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          # Install kraft-hyperlight
+          git clone --branch hyperlight-platform --depth 1 https://github.com/danbugs/kraftkit.git /tmp/kraftkit
+          cd /tmp/kraftkit && go build -o /usr/local/bin/kraft-hyperlight ./cmd/kraft
+          # Install hyperlight-unikraft
+          cd ${{ github.workspace }}/host && cargo build --release
+          sudo cp target/release/hyperlight-unikraft /usr/local/bin/
+
+      - name: Build kernel
+        working-directory: examples/${{ matrix.example.name }}
+        run: |
+          kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64 || true
+          # Fallback: manual source clone + build
+          if [ ! -f ".unikraft/build/${{ matrix.example.kernel }}" ]; then
+            UK_BRANCH=$(grep 'version:' kraft.yaml | head -1 | awk '{print $2}')
+            mkdir -p .unikraft/apps .unikraft/libs
+            rm -rf .unikraft/unikraft .unikraft/apps/elfloader
+            git clone --branch $UK_BRANCH --depth 1 https://github.com/danbugs/unikraft.git .unikraft/unikraft
+            git clone --branch $UK_BRANCH --depth 1 https://github.com/danbugs/app-elfloader.git .unikraft/apps/elfloader
+            git clone --branch staging --depth 1 https://github.com/unikraft/lib-libelf.git .unikraft/libs/libelf
+            rm -rf .unikraft/build
+            kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish kernel image
+        working-directory: examples
+        run: |
+          IMAGE=${{ env.IMAGE_BASE }}/${{ matrix.example.name }}-kernel:latest
+          # Package just the kernel binary in a scratch image
+          cat > /tmp/Dockerfile.kernel << DEOF
+          FROM scratch
+          COPY ${{ matrix.example.name }}/.unikraft/build/${{ matrix.example.kernel }} /kernel
+          DEOF
+          docker build -f /tmp/Dockerfile.kernel -t $IMAGE .
+          docker push $IMAGE
