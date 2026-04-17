@@ -24,7 +24,7 @@ RUN mkdir -p /tmp/home-stub && touch /tmp/home-stub/.keep
 # Create /tmp directory stub - PowerShell needs /tmp for module analysis cache
 RUN mkdir -p /tmp/tmp-stub
 
-FROM scratch
+FROM scratch AS rootfs
 COPY --from=base /lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
 COPY --from=base /usr/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
 COPY --from=base /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
@@ -38,3 +38,9 @@ COPY --from=download /tmp/proc-stub/self /proc/self
 COPY --from=download /tmp/etc-stub/passwd /etc/passwd
 COPY --from=download /tmp/home-stub /root
 COPY --from=download /tmp/tmp-stub /tmp
+
+# --- CPIO rootfs builder (used by: docker build --target cpio) ---
+FROM alpine:3.20 AS cpio
+RUN apk add --no-cache cpio findutils
+COPY --from=rootfs / /rootfs/
+RUN cd /rootfs && find . | cpio -o -H newc > /output.cpio 2>/dev/null

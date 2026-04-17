@@ -99,7 +99,7 @@ RUN set -xe ; \
 	strip -s /usr/local/lib/libpython*.so.* ; \
 	strip -s /usr/local/bin/python3.* 2>/dev/null || true
 
-FROM scratch
+FROM scratch AS rootfs
 
 COPY --from=base /usr/local/bin/ /usr/local/bin/
 COPY --from=base /usr/local/lib/ /usr/local/lib/
@@ -110,3 +110,10 @@ COPY --from=base /etc/ld.so.cache /etc/ld.so.cache
 
 # Hyperlight guest SDK - available as `import hyperlight`
 COPY hyperlight.py /usr/local/lib/python3.12/hyperlight.py
+
+# --- CPIO rootfs builder (used by: docker build --target cpio) ---
+FROM alpine:3.20 AS cpio
+RUN apk add --no-cache cpio findutils
+COPY --from=rootfs / /rootfs/
+COPY test_tools.py /rootfs/test_tools.py
+RUN cd /rootfs && find . | cpio -o -H newc > /output.cpio 2>/dev/null

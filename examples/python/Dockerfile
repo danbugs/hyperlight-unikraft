@@ -102,7 +102,7 @@ RUN set -xe ; \
 	strip -s /usr/local/lib/libpython*.so.* ; \
 	strip -s /usr/local/bin/python3.* 2>/dev/null || true
 
-FROM scratch
+FROM scratch AS rootfs
 
 COPY --from=base /usr/local/bin/ /usr/local/bin/
 COPY --from=base /usr/local/lib/ /usr/local/lib/
@@ -110,3 +110,10 @@ COPY --from=base /lib/x86_64-linux-gnu/libc.so.6 /lib/x86_64-linux-gnu/libc.so.6
 COPY --from=base /lib/x86_64-linux-gnu/libm.so.6 /lib/x86_64-linux-gnu/libm.so.6
 COPY --from=base /lib64/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2
 COPY --from=base /etc/ld.so.cache /etc/ld.so.cache
+
+# --- CPIO rootfs builder (used by: docker build --target cpio) ---
+FROM alpine:3.20 AS cpio
+RUN apk add --no-cache cpio findutils
+COPY --from=rootfs / /rootfs/
+COPY hello.py /rootfs/hello.py
+RUN cd /rootfs && find . | cpio -o -H newc > /output.cpio 2>/dev/null

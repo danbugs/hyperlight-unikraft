@@ -21,6 +21,12 @@ RUN set -xe; \
 COPY patch_interp.py /patch_interp.py
 RUN python3 /patch_interp.py /hello
 
-FROM scratch
+FROM scratch AS rootfs
 
 COPY --from=build /hello /bin/hello
+
+# --- CPIO rootfs builder (used by: docker build --target cpio) ---
+FROM alpine:3.20 AS cpio
+RUN apk add --no-cache cpio findutils
+COPY --from=rootfs / /rootfs/
+RUN cd /rootfs && find . | cpio -o -H newc > /output.cpio 2>/dev/null

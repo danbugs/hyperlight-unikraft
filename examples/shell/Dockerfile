@@ -51,5 +51,12 @@ RUN mkdir -p /rootfs/bin /rootfs/tmp && \
         ln -s busybox /rootfs/bin/"$applet"; \
     done
 
-FROM scratch
+FROM scratch AS rootfs
 COPY --from=builder /rootfs/ /
+
+# --- CPIO rootfs builder (used by: docker build --target cpio) ---
+FROM alpine:3.20 AS cpio
+RUN apk add --no-cache cpio findutils
+COPY --from=rootfs / /rootfs/
+COPY demo.sh /rootfs/demo.sh
+RUN cd /rootfs && find . | cpio -o -H newc > /output.cpio 2>/dev/null

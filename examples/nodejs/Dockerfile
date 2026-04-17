@@ -20,7 +20,7 @@ RUN set -xe; \
     ln -sf ../usr/share/zoneinfo/Etc/UTC /target/etc/localtime; \
     echo "Etc/UTC" > /target/etc/timezone;
 
-FROM scratch
+FROM scratch AS rootfs
 
 # System config
 COPY --from=sys /target/etc /etc
@@ -38,3 +38,9 @@ COPY --from=node /usr/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
 
 # Application
 COPY hello.js /app/hello.js
+
+# --- CPIO rootfs builder (used by: docker build --target cpio) ---
+FROM alpine:3.20 AS cpio
+RUN apk add --no-cache cpio findutils
+COPY --from=rootfs / /rootfs/
+RUN cd /rootfs && find . | cpio -o -H newc > /output.cpio 2>/dev/null
