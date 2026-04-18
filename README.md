@@ -50,58 +50,80 @@ This project enables running Linux applications (Python, Node.js, Go, Rust, C/C+
 
 ## Prerequisites
 
-- **Linux with KVM support** (`/dev/kvm` with read/write access)
-  - Note: Currently only KVM is supported (not MSHV) due to the `hw-interrupts` feature requirement
-- Go 1.25+ (for building kraft-hyperlight)
-- Docker (for building application rootfs)
-- Rust 1.89+ toolchain (for building the host)
-- `cpio` utility (`sudo apt install cpio`)
-- `musl-gcc` for C examples (`sudo apt install musl-tools`)
+Common on both Linux and Windows:
+
+- [Rust](https://rustup.rs/) 1.89+
+- [Docker](https://www.docker.com/) (builds the rootfs CPIO archives)
+- [`just`](https://github.com/casey/just) (build runner — replaces Make)
+
+Linux-only (needed to build Unikraft kernels locally):
+
+- KVM (`/dev/kvm` readable/writable)
+- Go 1.25+ (builds `kraft-hyperlight`)
+
+Windows-only:
+
+- Windows Hypervisor Platform (`Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform`; reboot)
+- Developer Mode enabled (Settings → For developers → Developer Mode)
+- Kernels are pulled pre-built from GHCR; `kraft-hyperlight` is not required.
 
 ## Setup
 
-### 1. Build Kraft with Hyperlight Support
-
-The examples use `kraft-hyperlight` to build Unikraft kernels:
+### Linux — from scratch
 
 ```bash
-git clone https://github.com/danbugs/kraftkit.git
-cd kraftkit
-git checkout hyperlight-platform
-go build -o kraft-hyperlight ./cmd/kraft
-sudo mv kraft-hyperlight /usr/local/bin/
-```
+# 1. Toolchain
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+cargo install just
 
-### 2. Build the Host
+# 2. kraft-hyperlight (builds Unikraft kernels)
+git clone --branch hyperlight-platform https://github.com/danbugs/kraftkit.git
+cd kraftkit && go build -o kraft-hyperlight ./cmd/kraft
+sudo mv kraft-hyperlight /usr/local/bin/ && cd ..
 
-```bash
-cd host
+# 3. This repo + host CLI
+git clone https://github.com/danbugs/hyperlight-unikraft.git
+cd hyperlight-unikraft/host
 cargo build --release
 sudo cp target/release/hyperlight-unikraft /usr/local/bin/
-```
+cd ..
 
-### 3. Run an Example
-
-Each example has a Makefile that handles building and running:
-
-```bash
-# C example (fastest to build)
+# 4. Run any example
 cd examples/helloworld-c
-make all
-
-# Python example
-cd examples/python
-make all
-
-# Go example
-cd examples/go
-make all
+just build      # build the Unikraft kernel with kraft-hyperlight
+just rootfs     # build the rootfs CPIO via Docker
+just run
 ```
 
-The `make all` command will:
-1. Build the Unikraft kernel with kraft
-2. Build the application rootfs (compile binary or extract from Docker)
-3. Run the application on Hyperlight
+### Windows — from scratch
+
+```powershell
+# 1. Toolchain
+# Install Rust via https://www.rust-lang.org/tools/install
+cargo install just
+
+# 2. This repo + host CLI
+git clone https://github.com/danbugs/hyperlight-unikraft.git
+cd hyperlight-unikraft\host
+cargo build --release
+Copy-Item target\release\hyperlight-unikraft.exe $env:USERPROFILE\.cargo\bin\ -Force
+cd ..
+
+# 3. Run any example (kernel pulled from GHCR)
+cd examples\helloworld-c
+just build      # docker pull ghcr.io/danbugs/hyperlight-unikraft/helloworld-c-kernel
+just rootfs     # docker build + extract CPIO
+just run
+```
+
+### What each recipe does
+
+| Recipe | Linux | Windows |
+|--------|-------|---------|
+| `just build` | `kraft-hyperlight build` | `docker pull` the pre-built kernel from GHCR |
+| `just rootfs` | `docker build --target cpio` + extract the CPIO | same |
+| `just run` | `hyperlight-unikraft <kernel> --initrd ...` | same |
+| `just clean` | remove `.unikraft/` and the CPIO | same |
 
 ## Examples
 
