@@ -134,9 +134,8 @@ just run
 | `python` | CPython 3.12 | Rootfs from Docker, script passed via cmdline |
 | `go` | Static PIE Go binary | Compiled with musl via Docker for CGO support |
 | `nodejs` | Node.js 21 | Rootfs from Alpine, script passed via cmdline |
-| `hostfs-c` | C + `/dev/hcall` | Explicit RPC to the host filesystem sandbox |
-| `hostfs-py` | Python | Same as `hostfs-c` wrapped in `hyperlight.py` |
 | `hostfs-posix-c` | C + unmodified POSIX | `open`/`read`/`write`/`mkdir` against `/host`, forwarded by `lib/hostfs` |
+| `hostfs-posix-py` | Python + stdlib | Same as `hostfs-posix-c` using `open()`/`os.mkdir`/`os.stat` |
 
 ### Host filesystem sandbox
 
@@ -146,7 +145,14 @@ Pass `--mount <HOST_DIR>` to expose that directory to the guest:
 hyperlight-unikraft kernel --initrd app.cpio --mount ./work
 ```
 
-Every path passed to `fs_*` tools (or POSIX ops on `/host/…` under `lib/hostfs`) is resolved relative to `HOST_DIR` and any attempt to escape it (via `..` or symlinks) is rejected on the host.
+`lib/hostfs` in the guest auto-mounts it at `/host`; unmodified POSIX
+calls (`open`, `read`, `write`, `stat`, `mkdir`, `truncate`, …) are
+forwarded by the VFS driver to the host's `FsSandbox` tool handlers.
+Every path is resolved relative to `HOST_DIR` and any attempt to
+escape it (via `..` or symlinks) is rejected host-side.
+
+Known limitation: `opendir`/`readdir` don't work yet (see
+[lib/hostfs/README.md](https://github.com/danbugs/unikraft/blob/hyperlight-platform-v0.13.1-rebased/lib/hostfs/README.md)). Stat and enumerate known paths instead.
 
 ### Running with Arguments
 

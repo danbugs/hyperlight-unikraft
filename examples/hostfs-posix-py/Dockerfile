@@ -1,6 +1,5 @@
 ARG BASE=ghcr.io/danbugs/hyperlight-unikraft/python-base:latest
 FROM ${BASE} AS rootfs
-COPY hyperlight.py /hyperlight.py
 COPY hostfs_demo.py /hostfs_demo.py
 
 FROM alpine:3.20 AS cpio
