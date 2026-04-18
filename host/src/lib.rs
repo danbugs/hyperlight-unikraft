@@ -365,6 +365,83 @@ impl FsSandbox {
             Ok(json!({}))
         });
 
+        // fs_read_bytes / fs_write_bytes — binary variants for the Phase B
+        // transparent POSIX shim. Bytes are base64-encoded in the JSON
+        // payload so arbitrary binary content round-trips intact.
+        //
+        // fs_read_bytes args: { path, offset?, len? } → { data: "<base64>", eof: bool }
+        // fs_write_bytes args: { path, data: "<base64>", offset?, append? } → { bytes_written }
+        let s = self.clone();
+        registry.register("fs_read_bytes", move |args| {
+            use base64::Engine;
+            use std::io::{Read, Seek, SeekFrom};
+            let path = args["path"].as_str()
+                .ok_or_else(|| anyhow!("fs_read_bytes: missing 'path'"))?;
+            let offset = args["offset"].as_u64().unwrap_or(0);
+            let want = args["len"].as_u64().unwrap_or(65536);
+            let target = s.resolve(path)?;
+            let mut f = std::fs::File::open(&target)
+                .map_err(|e| anyhow!("fs_read_bytes {:?}: {}", path, e))?;
+            if offset > 0 {
+                f.seek(SeekFrom::Start(offset))
+                    .map_err(|e| anyhow!("fs_read_bytes seek {:?}: {}", path, e))?;
+            }
+            let mut buf = vec![0u8; want as usize];
+            let n = f.read(&mut buf)
+                .map_err(|e| anyhow!("fs_read_bytes {:?}: {}", path, e))?;
+            buf.truncate(n);
+            let eof = n < want as usize;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
+            Ok(json!({ "data": encoded, "eof": eof, "bytes_read": n }))
+        });
+
+        let s = self.clone();
+        registry.register("fs_write_bytes", move |args| {
+            use base64::Engine;
+            use std::io::{Seek, SeekFrom, Write};
+            let path = args["path"].as_str()
+                .ok_or_else(|| anyhow!("fs_write_bytes: missing 'path'"))?;
+            let data_b64 = args["data"].as_str()
+                .ok_or_else(|| anyhow!("fs_write_bytes: missing 'data'"))?;
+            let data = base64::engine::general_purpose::STANDARD.decode(data_b64)
+                .map_err(|e| anyhow!("fs_write_bytes: bad base64: {}", e))?;
+            let offset = args["offset"].as_u64();
+            let append = args["append"].as_bool().unwrap_or(false);
+            let target = s.resolve(path)?;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(offset.is_none() && !append)
+                .append(append)
+                .open(&target)
+                .map_err(|e| anyhow!("fs_write_bytes {:?}: {}", path, e))?;
+            if let Some(off) = offset {
+                if !append {
+                    f.seek(SeekFrom::Start(off))
+                        .map_err(|e| anyhow!("fs_write_bytes seek {:?}: {}", path, e))?;
+                }
+            }
+            f.write_all(&data)
+                .map_err(|e| anyhow!("fs_write_bytes {:?}: {}", path, e))?;
+            Ok(json!({ "bytes_written": data.len() }))
+        });
+
+        let s = self.clone();
+        registry.register("fs_truncate", move |args| {
+            let path = args["path"].as_str()
+                .ok_or_else(|| anyhow!("fs_truncate: missing 'path'"))?;
+            let length = args["length"].as_u64()
+                .ok_or_else(|| anyhow!("fs_truncate: missing 'length'"))?;
+            let target = s.resolve(path)?;
+            let f = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&target)
+                .map_err(|e| anyhow!("fs_truncate {:?}: {}", path, e))?;
+            f.set_len(length)
+                .map_err(|e| anyhow!("fs_truncate {:?}: {}", path, e))?;
+            Ok(json!({}))
+        });
+
         let s = self.clone();
         registry.register("fs_unlink", move |args| {
             let path = args["path"].as_str()
