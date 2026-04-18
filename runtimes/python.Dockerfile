@@ -67,14 +67,6 @@ RUN set -xe ; \
 	rm -rf /usr/local/lib/python*/sqlite3 ; \
 	rm -rf /usr/local/lib/python*/multiprocessing ; \
 	rm -rf /usr/local/lib/python*/xmlrpc ; \
-	rm -rf /usr/local/lib/python*/html ; \
-	rm -rf /usr/local/lib/python*/http ; \
-	rm -rf /usr/local/lib/python*/email ; \
-	rm -rf /usr/local/lib/python*/logging ; \
-	rm -rf /usr/local/lib/python*/xml ; \
-	rm -rf /usr/local/lib/python*/asyncio ; \
-	rm -rf /usr/local/lib/python*/concurrent ; \
-	rm -rf /usr/local/lib/python*/ctypes ; \
 	rm -rf /usr/local/lib/python*/dbm ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_test* ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_codecs_jp* ; \
@@ -83,16 +75,8 @@ RUN set -xe ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_codecs_kr* ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_codecs_tw* ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_codecs_iso* ; \
-	rm -rf /usr/local/lib/python*/lib-dynload/_decimal* ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_multiprocess* ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_sqlite* ; \
-	rm -rf /usr/local/lib/python*/lib-dynload/_ctypes* ; \
-	rm -rf /usr/local/lib/python*/lib-dynload/pyexpat* ; \
-	rm -rf /usr/local/lib/python*/lib-dynload/_asyncio* ; \
-	rm -rf /usr/local/lib/python*/lib-dynload/_lzma* ; \
-	rm -rf /usr/local/lib/python*/lib-dynload/_bz2* ; \
-	rm -rf /usr/local/lib/python*/lib-dynload/unicodedata* ; \
-	rm -f /usr/local/lib/python*/_pydecimal.py ; \
 	rm -rf /usr/local/bin/idle3* ; \
 	rm -rf /usr/local/bin/2to3* ; \
 	rm -rf /usr/local/bin/pip* ; \
@@ -108,3 +92,16 @@ COPY --from=base /lib/x86_64-linux-gnu/libc.so.6 /lib/x86_64-linux-gnu/libc.so.6
 COPY --from=base /lib/x86_64-linux-gnu/libm.so.6 /lib/x86_64-linux-gnu/libm.so.6
 COPY --from=base /lib64/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2
 COPY --from=base /etc/ld.so.cache /etc/ld.so.cache
+
+# Shared libs that Python's C-extension modules link against. Keeping
+# them around means the trimmed interpreter can still load things like
+# binascii / zlib (libz), hashlib (libssl/libcrypto), ssl, xml (libexpat),
+# _bz2, _lzma, and ctypes (libffi) — covering most pip packages that
+# don't ship their own C binary.
+COPY --from=base /lib/x86_64-linux-gnu/libz.so.1      /lib/x86_64-linux-gnu/libz.so.1
+COPY --from=base /lib/x86_64-linux-gnu/libexpat.so.1  /lib/x86_64-linux-gnu/libexpat.so.1
+COPY --from=base /lib/x86_64-linux-gnu/libbz2.so.1.0  /lib/x86_64-linux-gnu/libbz2.so.1.0
+COPY --from=base /lib/x86_64-linux-gnu/liblzma.so.5   /lib/x86_64-linux-gnu/liblzma.so.5
+COPY --from=base /lib/x86_64-linux-gnu/libffi.so.8    /lib/x86_64-linux-gnu/libffi.so.8
+COPY --from=base /lib/x86_64-linux-gnu/libssl.so.3    /lib/x86_64-linux-gnu/libssl.so.3
+COPY --from=base /lib/x86_64-linux-gnu/libcrypto.so.3 /lib/x86_64-linux-gnu/libcrypto.so.3

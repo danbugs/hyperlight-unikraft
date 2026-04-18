@@ -57,6 +57,8 @@ jobs:
             kernel: hostfs-posix-c-hyperlight_hyperlight-x86_64
           - name: hostfs-posix-py
             kernel: hostfs-posix-py-hyperlight_hyperlight-x86_64
+          - name: python-agent
+            kernel: python-agent-hyperlight_hyperlight-x86_64
           - name: rust
             kernel: rust-hyperlight_hyperlight-x86_64
           - name: go
