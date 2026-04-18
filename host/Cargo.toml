@@ -15,9 +15,12 @@ name = "hyperlight-unikraft"
 path = "src/main.rs"
 
 [dependencies]
-# Use git dep until 0.14.1 is released with the Windows map_file_cow +
-# IO access size fixes (PRs #1386 and #1387).
-hyperlight-host = { git = "https://github.com/hyperlight-dev/hyperlight", branch = "main", features = ["executable_heap"] }
+# Temporarily point at danbugs/hyperlight fix-map-file-cow-unaligned while
+# hyperlight-dev/hyperlight#1388 is in review. That branch is upstream `main`
+# plus the unaligned map_file_cow fix, without which initrd cpios whose size
+# is not a multiple of the page size fail to map on Windows. Revert to
+# hyperlight-dev/hyperlight `main` once #1388 merges.
+hyperlight-host = { git = "https://github.com/danbugs/hyperlight", branch = "fix-map-file-cow-unaligned", features = ["executable_heap"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 memmap2 = "0.9"
