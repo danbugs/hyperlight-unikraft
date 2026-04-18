@@ -41,7 +41,7 @@ build:
 build:
     docker pull {{ghcr_kernel}}
     - docker rm -f {{image}}-kernel-tmp
-    docker create --name {{image}}-kernel-tmp {{ghcr_kernel}}
+    docker create --name {{image}}-kernel-tmp {{ghcr_kernel}} /kernel
     New-Item -ItemType Directory -Force -Path (Split-Path {{kernel}}) | Out-Null
     docker cp {{image}}-kernel-tmp:/kernel ./{{kernel}}
     docker rm -f {{image}}-kernel-tmp
