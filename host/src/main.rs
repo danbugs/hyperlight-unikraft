@@ -55,9 +55,43 @@ struct Args {
     #[arg(long, default_value = "0")]
     repeat: u32,
 
+    /// Inline code snippet. The guest interpreter is invoked with
+    /// `["-c", <code>]` — works for Python, `sh`, `node -e` style
+    /// interpreters that treat `-c` as "run the next arg as code".
+    /// The host handles all argparse-escape quoting internally, so your
+    /// code can contain arbitrary spaces, quotes, newlines, etc.
+    ///
+    /// Conflicts with positional `-- <args>`.
+    #[arg(long, short = 'e', conflicts_with = "app_args",
+          value_name = "CODE")]
+    exec: Option<String>,
+
     /// Application arguments (passed after --)
     #[arg(last = true)]
     app_args: Vec<String>,
+}
+
+/// Escape a string so that the guest-side `uk_argparse` tokenizer preserves
+/// it as a single argv entry, regardless of embedded whitespace or quotes.
+///
+/// Wraps the string in `"..."` and backslash-escapes internal `\` / `"`.
+/// The argparse rules then:
+///   - open-quote on the leading `"` (stripped),
+///   - `\"` → literal `"` (preserved inside the in-quote region),
+///   - `\\` → literal `\`,
+///   - whitespace inside the quote is preserved,
+///   - close-quote on the final `"` (stripped).
+fn argparse_escape(code: &str) -> String {
+    let mut out = String::with_capacity(code.len() + 4);
+    out.push('"');
+    for ch in code.chars() {
+        if ch == '\\' || ch == '"' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('"');
+    out
 }
 
 fn main() -> Result<()> {
@@ -94,8 +128,15 @@ fn main() -> Result<()> {
     // Zero-copy initrd via map_file_cow. If --mount is set, the directory is
     // preopened: the FsSandbox handlers get wired in and lib/hostfs in the
     // guest mounts it at the configured guest path.
+    // --exec CODE is sugar for `-- -c <CODE>`, but with the argparse
+    // escaping applied so the user doesn't have to think about it.
+    let app_args: Vec<String> = match args.exec {
+        Some(ref code) => vec!["-c".into(), argparse_escape(code)],
+        None => args.app_args.clone(),
+    };
+
     let mut builder = Sandbox::builder(&args.kernel)
-        .args(args.app_args.iter().cloned())
+        .args(app_args)
         .heap_size(heap_size)
         .stack_size(stack_size);
     if let Some(ref p) = args.initrd {

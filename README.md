@@ -163,22 +163,30 @@ escape (via `..` or symlinks) is rejected host-side.
 Known limitation: `opendir`/`readdir` don't work yet (see
 [lib/hostfs/README.md](https://github.com/danbugs/unikraft/blob/hyperlight-platform-v0.13.1-rebased/lib/hostfs/README.md)). Stat and enumerate known paths instead.
 
-### Running ad-hoc Python code (no initrd rebuild)
+### Running ad-hoc code (no initrd rebuild)
 
-`examples/hostfs-posix-py` adds two Justfile recipes that stash your code
-in the mount dir and run it from `/host/_inline.py`, so you don't need to
-rebuild the CPIO each iteration:
+`--exec CODE` / `-e CODE` feeds a snippet to the guest interpreter as
+`-c CODE`. The host handles all the argparse-escape quoting internally,
+so you can pass arbitrary whitespace, quotes, and newlines without
+wrapping:
 
 ```bash
-# One-liner
-just exec "print('hi'); print(2 + 2)"
-
-# A file on the host
-just run-file path/to/myscript.py
+hyperlight-unikraft python-kernel --initrd python.cpio --memory 96Mi \
+    --exec 'for i in range(3): print(i * i)'
 ```
 
-For other interpreters (`node`, `sh`, etc.) the same idea applies: write
-the script into your `--mount` dir and pass `/host/…` as the app argument.
+Works for any interpreter that treats `-c` as "run the next arg as
+code" — CPython, `sh`, etc. `node -e` works identically with `-e`.
+
+`examples/hostfs-posix-py` wraps it in two Justfile recipes:
+
+```bash
+just exec "print('hi'); print(2 + 2)"
+just run-file path/to/myscript.py   # file's contents → --exec
+```
+
+No `--mount` involved. No `/host/…` path contract. The host just passes
+argv.
 
 ### Running with Arguments
 
