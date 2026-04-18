@@ -18,6 +18,26 @@ run:
     mkdir -p {{mount_dir}}
     hyperlight-unikraft {{kernel}} --initrd {{initrd}} --memory {{memory}} --mount {{mount_dir}} -- /hostfs_demo.py
 
+# Run arbitrary Python without rebuilding the initrd — the code is written
+# into the mount dir and exec'd from /host/_inline.py in the guest.
+#
+#   just exec "print('hi')"
+#   just exec "$(cat myscript.py)"
+[unix]
+exec CODE:
+    mkdir -p {{mount_dir}}
+    printf '%s\n' {{quote(CODE)}} > {{mount_dir}}/_inline.py
+    hyperlight-unikraft {{kernel}} --initrd {{initrd}} --memory {{memory}} --mount {{mount_dir}} -- /host/_inline.py
+
+# Run a Python file from the host without packaging it in the initrd.
+#
+#   just run-file path/to/script.py
+[unix]
+run-file SCRIPT:
+    mkdir -p {{mount_dir}}
+    cp {{SCRIPT}} {{mount_dir}}/_inline.py
+    hyperlight-unikraft {{kernel}} --initrd {{initrd}} --memory {{memory}} --mount {{mount_dir}} -- /host/_inline.py
+
 [windows]
 run:
     New-Item -ItemType Directory -Force -Path {{mount_dir}} | Out-Null

@@ -163,6 +163,23 @@ escape (via `..` or symlinks) is rejected host-side.
 Known limitation: `opendir`/`readdir` don't work yet (see
 [lib/hostfs/README.md](https://github.com/danbugs/unikraft/blob/hyperlight-platform-v0.13.1-rebased/lib/hostfs/README.md)). Stat and enumerate known paths instead.
 
+### Running ad-hoc Python code (no initrd rebuild)
+
+`examples/hostfs-posix-py` adds two Justfile recipes that stash your code
+in the mount dir and run it from `/host/_inline.py`, so you don't need to
+rebuild the CPIO each iteration:
+
+```bash
+# One-liner
+just exec "print('hi'); print(2 + 2)"
+
+# A file on the host
+just run-file path/to/myscript.py
+```
+
+For other interpreters (`node`, `sh`, etc.) the same idea applies: write
+the script into your `--mount` dir and pass `/host/…` as the app argument.
+
 ### Running with Arguments
 
 For interpreted languages, pass the script path after `--`:
