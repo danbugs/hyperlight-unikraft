@@ -574,17 +574,15 @@ fn build_tools(
 }
 
 // ---------------------------------------------------------------------------
-// Sandbox — the primary API
+// Sandbox — the primary API (via `Sandbox::builder()`)
 // ---------------------------------------------------------------------------
 
 /// A Unikraft sandbox backed by Hyperlight's `MultiUseSandbox`.
 ///
-/// Lifecycle:
-///   1. `Sandbox::new()` — creates the VM and runs guest init (`evolve`)
-///   2. Automatically takes a snapshot after init
-///   3. `run()` — (future) calls a guest function; currently a no-op since
-///      unikernels do all work during init
-///   4. `restore()` — restores to the post-init snapshot for the next run
+/// Construct one with [`Sandbox::builder`]. Lifecycle:
+///   1. `.build()` — creates the VM and runs guest init, takes a snapshot
+///   2. [`Sandbox::restore`] — rewinds the VM to the post-init snapshot
+///   3. [`Sandbox::call_run`] — runs the guest application
 pub struct Sandbox {
     inner: MultiUseSandbox,
     /// Post-init snapshot for fast restore between calls.
@@ -595,14 +593,152 @@ pub struct Sandbox {
     file_mapping_base: u64,
 }
 
+/// Where the initrd comes from — either a file (zero-copy `map_file_cow`)
+/// or an in-memory buffer (copied into snapshot memory).
+enum InitrdSource {
+    File(std::path::PathBuf),
+    Bytes(Vec<u8>),
+}
+
+/// Fluent builder for [`Sandbox`]. Returned by [`Sandbox::builder`].
+///
+/// ```no_run
+/// use hyperlight_unikraft::{Preopen, Sandbox};
+///
+/// let sandbox = Sandbox::builder("kernel.bin")
+///     .initrd_file("app.cpio")
+///     .args(["arg1", "arg2"])
+///     .heap_size(16 << 20)
+///     .preopen(Preopen::new("./work", "/data")?)
+///     .tool("echo", |args| Ok(args))
+///     .build()?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub struct SandboxBuilder {
+    kernel: std::path::PathBuf,
+    initrd: Option<InitrdSource>,
+    args: Vec<String>,
+    heap_size: Option<u64>,
+    stack_size: Option<u64>,
+    preopen: Option<Preopen>,
+    tools: ToolRegistry,
+    has_tools: bool,
+}
+
+impl SandboxBuilder {
+    /// The initrd CPIO archive, mapped zero-copy into guest memory.
+    pub fn initrd_file<P: Into<std::path::PathBuf>>(mut self, path: P) -> Self {
+        self.initrd = Some(InitrdSource::File(path.into()));
+        self
+    }
+
+    /// An in-memory initrd buffer. Copied into snapshot memory.
+    /// Prefer [`initrd_file`](Self::initrd_file) for anything non-trivial.
+    pub fn initrd_bytes(mut self, bytes: Vec<u8>) -> Self {
+        self.initrd = Some(InitrdSource::Bytes(bytes));
+        self
+    }
+
+    /// Application arguments, passed to the guest via the cmdline header.
+    pub fn args<S, I>(mut self, args: I) -> Self
+    where
+        S: Into<String>,
+        I: IntoIterator<Item = S>,
+    {
+        self.args = args.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Append a single argument. Repeatable.
+    pub fn arg<S: Into<String>>(mut self, arg: S) -> Self {
+        self.args.push(arg.into());
+        self
+    }
+
+    /// Guest heap size in bytes (default 512 MiB).
+    pub fn heap_size(mut self, bytes: u64) -> Self {
+        self.heap_size = Some(bytes);
+        self
+    }
+
+    /// Guest stack size in bytes (default 8 MiB).
+    pub fn stack_size(mut self, bytes: u64) -> Self {
+        self.stack_size = Some(bytes);
+        self
+    }
+
+    /// Expose a host directory to the guest. `lib/hostfs` mounts
+    /// `preopen.host_dir` at `preopen.guest_path`; all FS tool handlers
+    /// are registered automatically. Calling twice replaces the preopen.
+    pub fn preopen(mut self, preopen: Preopen) -> Self {
+        self.preopen = Some(preopen);
+        self
+    }
+
+    /// Register a host function callable from the guest via `__dispatch`.
+    pub fn tool<F>(mut self, name: &str, handler: F) -> Self
+    where
+        F: Fn(serde_json::Value) -> Result<serde_json::Value> + Send + Sync + 'static,
+    {
+        self.tools.register(name, handler);
+        self.has_tools = true;
+        self
+    }
+
+    /// Boot the VM, run init, and take a post-init snapshot.
+    pub fn build(self) -> Result<Sandbox> {
+        let config = VmConfig {
+            heap_size: self.heap_size.unwrap_or(512 * 1024 * 1024),
+            stack_size: self.stack_size.unwrap_or(8 * 1024 * 1024),
+        };
+        let tools = if self.has_tools { Some(self.tools) } else { None };
+        match self.initrd {
+            Some(InitrdSource::File(path)) => Sandbox::evolve_mapped(
+                &self.kernel,
+                Some(&path),
+                &self.args,
+                config,
+                tools,
+                self.preopen.as_ref(),
+            ),
+            Some(InitrdSource::Bytes(bytes)) => Sandbox::evolve_inline(
+                &self.kernel,
+                Some(&bytes),
+                &self.args,
+                config,
+                tools,
+                self.preopen.as_ref(),
+            ),
+            None => Sandbox::evolve_mapped(
+                &self.kernel,
+                None,
+                &self.args,
+                config,
+                tools,
+                self.preopen.as_ref(),
+            ),
+        }
+    }
+}
+
 impl Sandbox {
-    /// Create a new sandbox, evolving the guest through its init phase.
-    ///
-    /// For unikernels that run their entire program during init, this
-    /// completes the full execution.  For guests that export callable
-    /// functions, init sets up the runtime and the host can then call
-    /// guest functions via `call()`.
-    pub fn new(
+    /// Start building a sandbox. See [`SandboxBuilder`] for the chainable
+    /// configuration methods.
+    pub fn builder<P: Into<std::path::PathBuf>>(kernel: P) -> SandboxBuilder {
+        SandboxBuilder {
+            kernel: kernel.into(),
+            initrd: None,
+            args: Vec::new(),
+            heap_size: None,
+            stack_size: None,
+            preopen: None,
+            tools: ToolRegistry::new(),
+            has_tools: false,
+        }
+    }
+
+    /// Low-level: boot with an in-memory initrd buffer. Prefer the builder.
+    pub(crate) fn evolve_inline(
         kernel_path: &Path,
         initrd: Option<&[u8]>,
         app_args: &[String],
@@ -628,7 +764,6 @@ impl Sandbox {
 
         let tools = build_tools(tools, preopen)?;
 
-        // Register tool dispatch host function if tools are provided
         if let Some(tools) = tools {
             let tools = Arc::new(tools);
             let tools_ref = tools.clone();
@@ -641,12 +776,8 @@ impl Sandbox {
         Self::finish_evolve(usbox, None, 0)
     }
 
-    /// Create a new sandbox with initrd mapped via zero-copy CoW file mapping.
-    ///
-    /// Instead of copying the initrd into snapshot memory, maps the file
-    /// directly into guest address space at INITRD_MAP_BASE. The guest's
-    /// demand-paging handler creates page table entries on first access.
-    pub fn new_with_file_initrd(
+    /// Low-level: boot with a zero-copy mapped initrd file. Prefer the builder.
+    pub(crate) fn evolve_mapped(
         kernel_path: &Path,
         initrd_path: Option<&Path>,
         app_args: &[String],
@@ -753,17 +884,15 @@ impl Sandbox {
 // Convenience: run_vm (single-shot execution)
 // ---------------------------------------------------------------------------
 
-/// Run a Unikraft kernel to completion (single-shot).
-///
-/// This is the simple path for unikernels that do all work during init.
-/// The entire program executes during `Sandbox::new()`.
+/// Run a Unikraft kernel to completion (single-shot). Thin shim over
+/// [`Sandbox::builder`] for callers that don't need the full fluent API.
 pub fn run_vm(
     kernel_path: &Path,
     initrd: Option<&[u8]>,
     app_args: &[String],
     config: VmConfig,
 ) -> Result<()> {
-    let _ = Sandbox::new(kernel_path, initrd, app_args, config, None, None)?;
+    let _ = Sandbox::evolve_inline(kernel_path, initrd, app_args, config, None, None)?;
     Ok(())
 }
 
@@ -775,16 +904,13 @@ pub fn run_vm_with_tools(
     config: VmConfig,
     tools: ToolRegistry,
 ) -> Result<()> {
-    let _ = Sandbox::new(kernel_path, initrd, app_args, config, Some(tools), None)?;
+    let _ =
+        Sandbox::evolve_inline(kernel_path, initrd, app_args, config, Some(tools), None)?;
     Ok(())
 }
 
-/// Run a Unikraft kernel with a preopened host directory.
-///
-/// The guest's `lib/hostfs` mounts `preopen.host_dir` at `preopen.guest_path`;
-/// unmodified POSIX calls route through the `FsSandbox` tool handlers.
-/// Escape attempts (via `..` or symlinks that point outside `host_dir`)
-/// are rejected host-side.
+/// Run a Unikraft kernel with a preopened host directory exposed via
+/// `lib/hostfs`. Sandbox escape attempts are rejected host-side.
 pub fn run_vm_with_preopen(
     kernel_path: &Path,
     initrd: Option<&[u8]>,
@@ -792,7 +918,8 @@ pub fn run_vm_with_preopen(
     config: VmConfig,
     preopen: &Preopen,
 ) -> Result<()> {
-    let _ = Sandbox::new(kernel_path, initrd, app_args, config, None, Some(preopen))?;
+    let _ =
+        Sandbox::evolve_inline(kernel_path, initrd, app_args, config, None, Some(preopen))?;
     Ok(())
 }
 
@@ -819,7 +946,8 @@ pub fn run_vm_capture_output(
 
     // Phase 1: evolve — boots the kernel and takes a post-init snapshot.
     // No application output happens here.
-    let mut sandbox = Sandbox::new(kernel_path, initrd, app_args, config, None, None)?;
+    let mut sandbox =
+        Sandbox::evolve_inline(kernel_path, initrd, app_args, config, None, None)?;
     let setup_time = setup_start.elapsed();
 
     // Redirect stderr to a temp file before the call phase

@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use hyperlight_unikraft::{parse_memory, Preopen, Sandbox, ToolRegistry, VmConfig};
+use hyperlight_unikraft::{parse_memory, Preopen, Sandbox};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -76,18 +76,6 @@ fn main() -> Result<()> {
         eprintln!("Memory: {heap_size} B, Stack: {stack_size} B");
     }
 
-    let config = VmConfig::default()
-        .with_heap_size(heap_size)
-        .with_stack_size(stack_size);
-
-    let tools = if args.enable_tools {
-        let mut t = ToolRegistry::new();
-        t.register("echo", |a| Ok(a));
-        Some(t)
-    } else {
-        None
-    };
-
     let preopen = match args.mount {
         Some(ref spec) => Some(Preopen::parse_cli(spec)?),
         None => None,
@@ -106,14 +94,20 @@ fn main() -> Result<()> {
     // Zero-copy initrd via map_file_cow. If --mount is set, the directory is
     // preopened: the FsSandbox handlers get wired in and lib/hostfs in the
     // guest mounts it at the configured guest path.
-    let mut sandbox = Sandbox::new_with_file_initrd(
-        &args.kernel,
-        args.initrd.as_deref(),
-        &args.app_args,
-        config,
-        tools,
-        preopen.as_ref(),
-    )?;
+    let mut builder = Sandbox::builder(&args.kernel)
+        .args(args.app_args.iter().cloned())
+        .heap_size(heap_size)
+        .stack_size(stack_size);
+    if let Some(ref p) = args.initrd {
+        builder = builder.initrd_file(p);
+    }
+    if let Some(p) = preopen {
+        builder = builder.preopen(p);
+    }
+    if args.enable_tools {
+        builder = builder.tool("echo", |a| Ok(a));
+    }
+    let mut sandbox = builder.build()?;
     let evolve_time = t0.elapsed();
 
     // Phase 2: restore + call — runs the application
