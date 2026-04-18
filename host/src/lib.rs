@@ -460,6 +460,25 @@ impl FsSandbox {
     }
 }
 
+/// Internal helper: assemble the final tool registry from caller-supplied
+/// tools plus any preopened directories. Returns `None` if neither produces
+/// any tools (so the `__dispatch` host function isn't registered in vain).
+fn build_tools(
+    user_tools: Option<ToolRegistry>,
+    preopened_dir: Option<&Path>,
+) -> Result<Option<ToolRegistry>> {
+    match (user_tools, preopened_dir) {
+        (None, None) => Ok(None),
+        (Some(t), None) => Ok(Some(t)),
+        (user, Some(dir)) => {
+            let mut registry = user.unwrap_or_default();
+            let fs = FsSandbox::new(dir)?;
+            fs.register(&mut registry);
+            Ok(Some(registry))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Sandbox — the primary API
 // ---------------------------------------------------------------------------
@@ -495,6 +514,7 @@ impl Sandbox {
         app_args: &[String],
         config: VmConfig,
         tools: Option<ToolRegistry>,
+        preopened_dir: Option<&Path>,
     ) -> Result<Self> {
         if !kernel_path.exists() {
             return Err(anyhow!("Kernel not found: {:?}", kernel_path));
@@ -507,6 +527,8 @@ impl Sandbox {
         );
 
         let mut usbox = UninitializedSandbox::new(env, Some(config.sandbox_config()))?;
+
+        let tools = build_tools(tools, preopened_dir)?;
 
         // Register tool dispatch host function if tools are provided
         if let Some(tools) = tools {
@@ -532,6 +554,7 @@ impl Sandbox {
         app_args: &[String],
         config: VmConfig,
         tools: Option<ToolRegistry>,
+        preopened_dir: Option<&Path>,
     ) -> Result<Self> {
         if !kernel_path.exists() {
             return Err(anyhow!("Kernel not found: {:?}", kernel_path));
@@ -560,6 +583,8 @@ impl Sandbox {
         if let Some(path) = initrd_path {
             usbox.map_file_cow(path, INITRD_MAP_BASE, Some("initrd"))?;
         }
+
+        let tools = build_tools(tools, preopened_dir)?;
 
         // Register tool dispatch if needed
         if let Some(tools) = tools {
@@ -636,7 +661,7 @@ pub fn run_vm(
     app_args: &[String],
     config: VmConfig,
 ) -> Result<()> {
-    let _ = Sandbox::new(kernel_path, initrd, app_args, config, None)?;
+    let _ = Sandbox::new(kernel_path, initrd, app_args, config, None, None)?;
     Ok(())
 }
 
@@ -648,7 +673,23 @@ pub fn run_vm_with_tools(
     config: VmConfig,
     tools: ToolRegistry,
 ) -> Result<()> {
-    let _ = Sandbox::new(kernel_path, initrd, app_args, config, Some(tools))?;
+    let _ = Sandbox::new(kernel_path, initrd, app_args, config, Some(tools), None)?;
+    Ok(())
+}
+
+/// Run a Unikraft kernel with a preopened host directory.
+///
+/// The guest's `lib/hostfs` mounts `host_dir` at `/host`; unmodified POSIX
+/// calls route through the `FsSandbox` tool handlers. Escape attempts (via
+/// `..` or symlinks that point outside `host_dir`) are rejected host-side.
+pub fn run_vm_with_preopen(
+    kernel_path: &Path,
+    initrd: Option<&[u8]>,
+    app_args: &[String],
+    config: VmConfig,
+    host_dir: &Path,
+) -> Result<()> {
+    let _ = Sandbox::new(kernel_path, initrd, app_args, config, None, Some(host_dir))?;
     Ok(())
 }
 
@@ -675,7 +716,7 @@ pub fn run_vm_capture_output(
 
     // Phase 1: evolve — boots the kernel and takes a post-init snapshot.
     // No application output happens here.
-    let mut sandbox = Sandbox::new(kernel_path, initrd, app_args, config, None)?;
+    let mut sandbox = Sandbox::new(kernel_path, initrd, app_args, config, None, None)?;
     let setup_time = setup_start.elapsed();
 
     // Redirect stderr to a temp file before the call phase
@@ -709,4 +750,124 @@ pub fn run_vm_capture_output(
         setup_time,
         evolve_time,
     })
+}
+
+// ---------------------------------------------------------------------------
+// FsSandbox tests — prove that host-side path resolution rejects escapes.
+//
+// These cover both attack vectors the host can see: lexical ".." /
+// absolute paths passed in an RPC arg, and symlinks inside the mount
+// that point outside it.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn tmpdir(label: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "hl-fs-sandbox-{}-{}",
+            label,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&p);
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn resolve_rejects_parent_escape() {
+        let root = tmpdir("parent");
+        let fs = FsSandbox::new(&root).unwrap();
+        let err = fs.resolve("../etc/passwd").unwrap_err().to_string();
+        assert!(err.contains("escapes mount root"), "{err}");
+    }
+
+    #[test]
+    fn resolve_rejects_deep_parent_escape() {
+        let root = tmpdir("deep");
+        let fs = FsSandbox::new(&root).unwrap();
+        let err = fs.resolve("a/b/../../../outside").unwrap_err().to_string();
+        assert!(err.contains("escapes mount root"), "{err}");
+    }
+
+    #[test]
+    fn resolve_treats_absolute_paths_as_mount_relative() {
+        // A leading '/' is stripped, so "/etc/passwd" becomes
+        // "etc/passwd" under the mount — not the host's /etc/passwd.
+        let root = tmpdir("abs");
+        fs::create_dir(root.join("etc")).unwrap();
+        fs::write(root.join("etc/passwd"), "fake").unwrap();
+        let fs_sb = FsSandbox::new(&root).unwrap();
+        let resolved = fs_sb.resolve("/etc/passwd").unwrap();
+        assert_eq!(resolved, root.join("etc/passwd"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        let root = tmpdir("symlink");
+        let outside = tmpdir("outside");
+        fs::write(outside.join("secret"), "nope").unwrap();
+        symlink(outside.join("secret"), root.join("leak")).unwrap();
+        let fs_sb = FsSandbox::new(&root).unwrap();
+        let err = fs_sb.resolve("leak").unwrap_err().to_string();
+        assert!(err.contains("escapes mount root"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_rejects_symlink_escape_via_ancestor() {
+        // A symlinked parent directory is just as effective: any child
+        // under it resolves outside the root.
+        use std::os::unix::fs::symlink;
+        let root = tmpdir("ancestor");
+        let outside = tmpdir("outside-anc");
+        symlink(&outside, root.join("shortcut")).unwrap();
+        let fs_sb = FsSandbox::new(&root).unwrap();
+        let err = fs_sb.resolve("shortcut/anything").unwrap_err().to_string();
+        assert!(err.contains("escapes mount root"), "{err}");
+    }
+
+    #[test]
+    fn resolve_allows_paths_under_the_root() {
+        let root = tmpdir("allow");
+        let fs = FsSandbox::new(&root).unwrap();
+        let resolved = fs.resolve("subdir/file.txt").unwrap();
+        assert!(resolved.starts_with(&root), "{resolved:?}");
+    }
+
+    #[test]
+    fn fs_read_over_dispatch_rejects_escape() {
+        // End-to-end through the tool registry: the error surface the
+        // guest actually sees.
+        let root = tmpdir("dispatch");
+        let mut reg = ToolRegistry::new();
+        FsSandbox::new(&root).unwrap().register(&mut reg);
+
+        let req = br#"{"name":"fs_read","args":{"path":"../outside.txt"}}"#;
+        let resp = reg.dispatch(req);
+        let s = std::str::from_utf8(&resp).unwrap();
+        assert!(s.contains("\"error\""), "{s}");
+        assert!(s.contains("escapes mount root"), "{s}");
+    }
+
+    #[test]
+    fn fs_write_then_read_roundtrip() {
+        let root = tmpdir("roundtrip");
+        let mut reg = ToolRegistry::new();
+        FsSandbox::new(&root).unwrap().register(&mut reg);
+
+        let w = br#"{"name":"fs_write","args":{"path":"hello.txt","text":"hi"}}"#;
+        let resp = reg.dispatch(w);
+        let s = std::str::from_utf8(&resp).unwrap();
+        assert!(s.contains("\"bytes_written\":2"), "{s}");
+
+        let r = br#"{"name":"fs_read","args":{"path":"hello.txt"}}"#;
+        let resp = reg.dispatch(r);
+        let s = std::str::from_utf8(&resp).unwrap();
+        assert!(s.contains("\"text\":\"hi\""), "{s}");
+    }
 }

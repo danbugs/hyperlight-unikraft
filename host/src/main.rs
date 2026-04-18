@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use hyperlight_unikraft::{parse_memory, FsSandbox, Sandbox, ToolRegistry, VmConfig};
+use hyperlight_unikraft::{parse_memory, Sandbox, ToolRegistry, VmConfig};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -37,11 +37,12 @@ struct Args {
     #[arg(long)]
     enable_tools: bool,
 
-    /// Mount a host directory as the guest's sandboxed filesystem.
-    /// The guest can call fs_read/fs_write/fs_list/fs_stat/fs_mkdir/fs_unlink
-    /// via `__dispatch`; all paths are resolved relative to this directory
-    /// and any attempt to escape it (via `..` or symlinks) is rejected.
-    /// Implies --enable-tools.
+    /// Preopen a host directory for the guest's sandboxed filesystem.
+    /// lib/hostfs in the guest auto-mounts it at /host; unmodified POSIX
+    /// calls (open/read/write/stat/mkdir/truncate…) route through the
+    /// FsSandbox tool handlers. Every guest path is resolved relative to
+    /// this directory and any attempt to escape it (via `..` or symlinks)
+    /// is rejected host-side.
     #[arg(long)]
     mount: Option<PathBuf>,
 
@@ -75,29 +76,31 @@ fn main() -> Result<()> {
         .with_heap_size(heap_size)
         .with_stack_size(stack_size);
 
-    let tools = if args.enable_tools || args.mount.is_some() {
+    let tools = if args.enable_tools {
         let mut t = ToolRegistry::new();
         t.register("echo", |a| Ok(a));
-        if let Some(ref dir) = args.mount {
-            let fs = FsSandbox::new(dir)?;
-            if !args.quiet {
-                eprintln!("Mount: {:?} (sandboxed filesystem)", fs.root());
-            }
-            fs.register(&mut t);
-        }
         Some(t)
     } else {
         None
     };
 
-    // Phase 1: evolve — boots kernel, loads ELF, signals ready
-    // Use map_file_cow for zero-copy initrd mapping
+    if !args.quiet {
+        if let Some(ref dir) = args.mount {
+            eprintln!("Preopened dir: {:?} (guest-visible at /host)", dir);
+        }
+    }
+
+    // Phase 1: evolve — boots kernel, loads ELF, signals ready.
+    // Zero-copy initrd via map_file_cow. If --mount is set, the directory is
+    // preopened: the FsSandbox handlers get wired in and lib/hostfs in the
+    // guest forwards POSIX ops to them.
     let mut sandbox = Sandbox::new_with_file_initrd(
         &args.kernel,
         args.initrd.as_deref(),
         &args.app_args,
         config,
         tools,
+        args.mount.as_deref(),
     )?;
     let evolve_time = t0.elapsed();
 

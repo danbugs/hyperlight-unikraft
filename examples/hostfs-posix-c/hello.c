@@ -66,6 +66,20 @@ int main(void)
 	if (stat("/host/greeting.txt", &st) == 0)
 		printf("stat: size=%lld\n", (long long)st.st_size);
 
+	/* Sandbox escape scenarios that the host refuses (proven by
+	 * the Rust-side FsSandbox tests in host/src/lib.rs):
+	 *
+	 *   - "..": path components resolving above the mount root
+	 *   - absolute "/etc/passwd" re-interpreted as under the mount
+	 *   - symlinks inside the mount pointing to an outside path
+	 *
+	 * We'd open() a planted symlink here to demo it live, but the
+	 * Unikraft build we target currently crashes on any open() that
+	 * returns an error (vfscore namei cleanup bug — reproduces with
+	 * open("/nonexistent") against plain ramfs too). Tracked
+	 * separately; not a hostfs issue.
+	 */
+
 	puts("done.");
 	return 0;
 }
