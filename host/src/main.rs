@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use hyperlight_unikraft::{parse_memory, Sandbox, ToolRegistry, VmConfig};
+use hyperlight_unikraft::{parse_memory, FsSandbox, Sandbox, ToolRegistry, VmConfig};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -36,6 +36,14 @@ struct Args {
     /// Enable tool dispatch via __dispatch host function
     #[arg(long)]
     enable_tools: bool,
+
+    /// Mount a host directory as the guest's sandboxed filesystem.
+    /// The guest can call fs_read/fs_write/fs_list/fs_stat/fs_mkdir/fs_unlink
+    /// via `__dispatch`; all paths are resolved relative to this directory
+    /// and any attempt to escape it (via `..` or symlinks) is rejected.
+    /// Implies --enable-tools.
+    #[arg(long)]
+    mount: Option<PathBuf>,
 
     /// Run the application N additional times via snapshot/restore + call.
     /// The first run always happens. --repeat=2 means 3 total runs.
@@ -67,9 +75,16 @@ fn main() -> Result<()> {
         .with_heap_size(heap_size)
         .with_stack_size(stack_size);
 
-    let tools = if args.enable_tools {
+    let tools = if args.enable_tools || args.mount.is_some() {
         let mut t = ToolRegistry::new();
         t.register("echo", |a| Ok(a));
+        if let Some(ref dir) = args.mount {
+            let fs = FsSandbox::new(dir)?;
+            if !args.quiet {
+                eprintln!("Mount: {:?} (sandboxed filesystem)", fs.root());
+            }
+            fs.register(&mut t);
+        }
         Some(t)
     } else {
         None

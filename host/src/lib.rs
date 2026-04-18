@@ -193,6 +193,197 @@ impl Default for ToolRegistry {
 }
 
 // ---------------------------------------------------------------------------
+// Filesystem sandbox — Phase A of host-mediated POSIX FS access
+// ---------------------------------------------------------------------------
+
+/// A sandboxed view of a host directory that the guest can read/write via
+/// host function calls. All guest-supplied paths are resolved relative to
+/// `root`; any attempt to escape the root (`..`, absolute paths, symlinks
+/// pointing outside) is rejected.
+///
+/// Phase A deliberately exposes an explicit RPC surface: the guest calls
+/// `fs_read` / `fs_write` / `fs_list` / `fs_stat` / `fs_mkdir` / `fs_unlink`
+/// by name. Phase B will add a transparent POSIX shim in Unikraft that
+/// forwards VFS operations to these same host handlers.
+#[derive(Clone)]
+pub struct FsSandbox {
+    root: std::path::PathBuf,
+}
+
+impl FsSandbox {
+    /// Create a new sandbox rooted at `root` (must be an existing directory).
+    pub fn new<P: AsRef<Path>>(root: P) -> Result<Self> {
+        let root = std::fs::canonicalize(root.as_ref())
+            .map_err(|e| anyhow!("canonicalize mount root {:?}: {}", root.as_ref(), e))?;
+        if !root.is_dir() {
+            return Err(anyhow!("mount root is not a directory: {:?}", root));
+        }
+        Ok(Self { root })
+    }
+
+    pub fn root(&self) -> &Path { &self.root }
+
+    /// Resolve a guest-supplied path to a host path that is guaranteed to
+    /// live under `root`. Returns an error on any escape attempt.
+    ///
+    /// Strategy:
+    ///  - Strip any leading `/` so guest paths are relative to the mount.
+    ///  - Logically normalise `.` / `..` without touching the filesystem.
+    ///  - If the resolved path exists, `canonicalize` to follow symlinks
+    ///    and verify the target is under `root`.
+    ///  - If it doesn't exist (e.g. creating a new file), canonicalise the
+    ///    nearest existing ancestor and append the remaining components —
+    ///    this still catches symlinked ancestors that escape the root.
+    fn resolve(&self, guest_path: &str) -> Result<std::path::PathBuf> {
+        use std::path::{Component, PathBuf};
+        let rel = guest_path.trim_start_matches('/');
+        let joined = self.root.join(rel);
+        // Logical resolution first: reject ".." once we're rooted.
+        let mut logical = PathBuf::new();
+        for c in joined.components() {
+            match c {
+                Component::ParentDir => {
+                    if !logical.pop() {
+                        return Err(anyhow!("path escapes mount root: {:?}", guest_path));
+                    }
+                }
+                Component::CurDir => {}
+                c => logical.push(c),
+            }
+        }
+        if !logical.starts_with(&self.root) {
+            return Err(anyhow!("path escapes mount root: {:?}", guest_path));
+        }
+        // Symlink check: canonicalise the deepest existing ancestor.
+        let mut existing = logical.as_path();
+        let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+        let resolved_ancestor = loop {
+            if existing.exists() {
+                break std::fs::canonicalize(existing)
+                    .map_err(|e| anyhow!("canonicalize {:?}: {}", existing, e))?;
+            }
+            let Some(name) = existing.file_name() else {
+                return Err(anyhow!("path has no existing ancestor: {:?}", logical));
+            };
+            tail.push(name);
+            existing = existing.parent()
+                .ok_or_else(|| anyhow!("path has no existing ancestor: {:?}", logical))?;
+        };
+        if !resolved_ancestor.starts_with(&self.root) {
+            return Err(anyhow!("path escapes mount root (symlink): {:?}", guest_path));
+        }
+        let mut out = resolved_ancestor;
+        for name in tail.into_iter().rev() {
+            out.push(name);
+        }
+        Ok(out)
+    }
+
+    /// Register all FS tool handlers (`fs_read`, `fs_write`, …) on `registry`.
+    pub fn register(self, registry: &mut ToolRegistry) {
+        use serde_json::json;
+
+        let s = self.clone();
+        registry.register("fs_read", move |args| {
+            let path = args["path"].as_str()
+                .ok_or_else(|| anyhow!("fs_read: missing 'path'"))?;
+            let target = s.resolve(path)?;
+            let text = std::fs::read_to_string(&target)
+                .map_err(|e| anyhow!("fs_read {:?}: {}", path, e))?;
+            Ok(json!({ "text": text }))
+        });
+
+        let s = self.clone();
+        registry.register("fs_write", move |args| {
+            let path = args["path"].as_str()
+                .ok_or_else(|| anyhow!("fs_write: missing 'path'"))?;
+            let text = args["text"].as_str()
+                .ok_or_else(|| anyhow!("fs_write: missing 'text'"))?;
+            let append = args["append"].as_bool().unwrap_or(false);
+            let target = s.resolve(path)?;
+            // Create parent dirs? No — guest must fs_mkdir explicitly.
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(!append)
+                .append(append)
+                .open(&target)
+                .map_err(|e| anyhow!("fs_write {:?}: {}", path, e))?;
+            f.write_all(text.as_bytes())
+                .map_err(|e| anyhow!("fs_write {:?}: {}", path, e))?;
+            Ok(json!({ "bytes_written": text.len() }))
+        });
+
+        let s = self.clone();
+        registry.register("fs_list", move |args| {
+            let path = args["path"].as_str().unwrap_or("");
+            let target = s.resolve(path)?;
+            let mut entries = Vec::new();
+            for entry in std::fs::read_dir(&target)
+                .map_err(|e| anyhow!("fs_list {:?}: {}", path, e))?
+            {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let ft = entry.file_type()?;
+                entries.push(json!({
+                    "name": name,
+                    "is_dir": ft.is_dir(),
+                    "is_file": ft.is_file(),
+                    "is_symlink": ft.is_symlink(),
+                }));
+            }
+            Ok(json!({ "entries": entries }))
+        });
+
+        let s = self.clone();
+        registry.register("fs_stat", move |args| {
+            let path = args["path"].as_str()
+                .ok_or_else(|| anyhow!("fs_stat: missing 'path'"))?;
+            let target = s.resolve(path)?;
+            let md = std::fs::metadata(&target)
+                .map_err(|e| anyhow!("fs_stat {:?}: {}", path, e))?;
+            Ok(json!({
+                "size": md.len(),
+                "is_dir": md.is_dir(),
+                "is_file": md.is_file(),
+            }))
+        });
+
+        let s = self.clone();
+        registry.register("fs_mkdir", move |args| {
+            let path = args["path"].as_str()
+                .ok_or_else(|| anyhow!("fs_mkdir: missing 'path'"))?;
+            let parents = args["parents"].as_bool().unwrap_or(false);
+            let target = s.resolve(path)?;
+            if parents {
+                std::fs::create_dir_all(&target)
+            } else {
+                std::fs::create_dir(&target)
+            }
+            .map_err(|e| anyhow!("fs_mkdir {:?}: {}", path, e))?;
+            Ok(json!({}))
+        });
+
+        let s = self.clone();
+        registry.register("fs_unlink", move |args| {
+            let path = args["path"].as_str()
+                .ok_or_else(|| anyhow!("fs_unlink: missing 'path'"))?;
+            let target = s.resolve(path)?;
+            let md = std::fs::metadata(&target)
+                .map_err(|e| anyhow!("fs_unlink {:?}: {}", path, e))?;
+            if md.is_dir() {
+                std::fs::remove_dir(&target)
+            } else {
+                std::fs::remove_file(&target)
+            }
+            .map_err(|e| anyhow!("fs_unlink {:?}: {}", path, e))?;
+            Ok(json!({}))
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Sandbox — the primary API
 // ---------------------------------------------------------------------------
 
