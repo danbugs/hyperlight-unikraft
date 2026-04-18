@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use hyperlight_unikraft::{parse_memory, Sandbox, ToolRegistry, VmConfig};
+use hyperlight_unikraft::{parse_memory, Preopen, Sandbox, ToolRegistry, VmConfig};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -38,13 +38,17 @@ struct Args {
     enable_tools: bool,
 
     /// Preopen a host directory for the guest's sandboxed filesystem.
-    /// lib/hostfs in the guest auto-mounts it at /host; unmodified POSIX
-    /// calls (open/read/write/stat/mkdir/truncate…) route through the
-    /// FsSandbox tool handlers. Every guest path is resolved relative to
-    /// this directory and any attempt to escape it (via `..` or symlinks)
-    /// is rejected host-side.
-    #[arg(long)]
-    mount: Option<PathBuf>,
+    ///
+    /// Syntax: `HOST_DIR[:GUEST_PATH]`. When `GUEST_PATH` is omitted the
+    /// default is `/host`. lib/hostfs in the guest auto-mounts `HOST_DIR`
+    /// at `GUEST_PATH`; unmodified POSIX calls (open/read/write/stat/…)
+    /// route through the FsSandbox tool handlers. Guest-supplied paths
+    /// are resolved relative to `HOST_DIR` and any escape (via `..` or
+    /// symlinks) is rejected host-side. `GUEST_PATH` must be absolute
+    /// and cannot shadow the kernel's own reserved directories
+    /// (`/bin`, `/dev`, `/proc`, `/sys`, `/usr`, `/`).
+    #[arg(long, value_name = "HOST[:GUEST]")]
+    mount: Option<String>,
 
     /// Run the application N additional times via snapshot/restore + call.
     /// The first run always happens. --repeat=2 means 3 total runs.
@@ -84,23 +88,31 @@ fn main() -> Result<()> {
         None
     };
 
+    let preopen = match args.mount {
+        Some(ref spec) => Some(Preopen::parse_cli(spec)?),
+        None => None,
+    };
+
     if !args.quiet {
-        if let Some(ref dir) = args.mount {
-            eprintln!("Preopened dir: {:?} (guest-visible at /host)", dir);
+        if let Some(ref p) = preopen {
+            eprintln!(
+                "Preopened: {:?} -> {} (guest)",
+                p.host_dir, p.guest_path
+            );
         }
     }
 
     // Phase 1: evolve — boots kernel, loads ELF, signals ready.
     // Zero-copy initrd via map_file_cow. If --mount is set, the directory is
     // preopened: the FsSandbox handlers get wired in and lib/hostfs in the
-    // guest forwards POSIX ops to them.
+    // guest mounts it at the configured guest path.
     let mut sandbox = Sandbox::new_with_file_initrd(
         &args.kernel,
         args.initrd.as_deref(),
         &args.app_args,
         config,
         tools,
-        args.mount.as_deref(),
+        preopen.as_ref(),
     )?;
     let evolve_time = t0.elapsed();
 

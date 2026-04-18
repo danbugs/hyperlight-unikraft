@@ -20,7 +20,75 @@ use std::time::Duration;
 /// Magic header for cmdline embedded in initrd: "HLCMDLN\0"
 const CMDLINE_MAGIC: &[u8; 8] = b"HLCMDLN\0";
 
+/// Magic header for the optional hostfs mount point TLV that follows the
+/// cmdline (same init_data page).
+const MOUNT_MAGIC: &[u8; 8] = b"HLHSMNT\0";
+
 const PAGE_SIZE: usize = 4096;
+
+/// Guest paths that would shadow the kernel's own ramfs and break the VM.
+/// Reject these early on the host before we even boot the guest.
+const RESERVED_GUEST_MOUNTPOINTS: &[&str] = &[
+    "/", "/bin", "/dev", "/proc", "/sys", "/usr",
+];
+
+/// A preopened host directory exposed to the guest.
+///
+/// Semantics mirror Wasmtime's `preopened_dir`: `host_dir` is canonicalised
+/// at construction time and used as the sandbox root for every RPC the
+/// guest issues; `guest_path` is the absolute path inside the guest where
+/// `lib/hostfs` mounts it.
+#[derive(Clone, Debug)]
+pub struct Preopen {
+    pub host_dir: std::path::PathBuf,
+    pub guest_path: String,
+}
+
+impl Preopen {
+    /// Construct a preopen. `guest_path` must be absolute (`/something`)
+    /// and not shadow a reserved kernel directory — see
+    /// `RESERVED_GUEST_MOUNTPOINTS`.
+    pub fn new<P: AsRef<Path>>(host_dir: P, guest_path: impl Into<String>) -> Result<Self> {
+        let guest_path = guest_path.into();
+        if !guest_path.starts_with('/') {
+            return Err(anyhow!(
+                "guest mount path {:?} must be absolute",
+                guest_path
+            ));
+        }
+        for reserved in RESERVED_GUEST_MOUNTPOINTS {
+            if guest_path == *reserved
+                || guest_path.starts_with(&format!("{}/", reserved))
+            {
+                return Err(anyhow!(
+                    "refusing to mount at guest path {:?}: shadows reserved kernel dir",
+                    guest_path
+                ));
+            }
+        }
+        let host_dir = std::fs::canonicalize(host_dir.as_ref()).map_err(|e| {
+            anyhow!("canonicalize preopen host dir {:?}: {}", host_dir.as_ref(), e)
+        })?;
+        Ok(Self { host_dir, guest_path })
+    }
+
+    /// Parse a `HOST[:GUEST]` CLI argument. When `GUEST` is omitted the
+    /// default guest mount point is `/host`.
+    pub fn parse_cli(s: &str) -> Result<Self> {
+        // Windows absolute paths contain ':'. Disambiguate by splitting on
+        // the *last* colon only if the right side looks like an absolute
+        // guest path (starts with /). Otherwise treat the whole string as
+        // the host dir.
+        if let Some(idx) = s.rfind(':') {
+            let (host, guest) = s.split_at(idx);
+            let guest = &guest[1..];
+            if guest.starts_with('/') {
+                return Self::new(host, guest);
+            }
+        }
+        Self::new(s, "/host")
+    }
+}
 
 /// Guest VA for the initrd mapped via map_file_cow.
 /// Computed dynamically in new_with_file_initrd to be after the
@@ -98,52 +166,78 @@ pub fn parse_memory(mem_str: &str) -> Result<u64> {
 // Initrd cmdline prepend
 // ---------------------------------------------------------------------------
 
-/// Build init_data with cmdline + mapped initrd size (for map_file_cow mode).
-/// The mapped file size is stored in the last 8 bytes of the page-aligned header.
-fn build_cmdline_initdata(app_args: &[String], mapped_initrd_size: u64) -> Option<Vec<u8>> {
-    let cmdline = app_args.join(" ");
-    if cmdline.is_empty() && mapped_initrd_size == 0 {
-        return None;
-    }
-
-    let cmdline_bytes = cmdline.as_bytes();
+/// Serialize the shared "cmdline + optional mount point" TLV block into `buf`.
+///
+/// Layout:
+///   [HLCMDLN\0][cmdline_len u32][cmdline…][\0]
+///   [HLHSMNT\0][mount_len u32][mount…][\0]   (only when `mount_point` is set)
+///
+/// Callers are responsible for any trailing padding / metadata (e.g. the
+/// mapped-initrd-size footer used by `build_cmdline_initdata`).
+fn write_cmdline_mount_tlv(
+    buf: &mut Vec<u8>,
+    cmdline_bytes: &[u8],
+    mount_point: Option<&str>,
+) {
     let cmdline_len = cmdline_bytes.len() as u32;
-    let header_size = 8 + 4 + cmdline_len as usize + 1;
-    let padded = (header_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-
-    let mut buf = Vec::with_capacity(padded);
     buf.extend_from_slice(CMDLINE_MAGIC);
     buf.extend_from_slice(&cmdline_len.to_le_bytes());
     buf.extend_from_slice(cmdline_bytes);
     buf.push(0);
-    // Pad to page boundary minus 8, then append mapped size
+
+    if let Some(mount) = mount_point {
+        let mount_bytes = mount.as_bytes();
+        let mount_len = mount_bytes.len() as u32;
+        buf.extend_from_slice(MOUNT_MAGIC);
+        buf.extend_from_slice(&mount_len.to_le_bytes());
+        buf.extend_from_slice(mount_bytes);
+        buf.push(0);
+    }
+}
+
+/// Build init_data with cmdline + optional hostfs mount point + mapped
+/// initrd size (for map_file_cow mode). The mapped file size is stored in
+/// the last 8 bytes of the page-aligned header.
+fn build_cmdline_initdata(
+    app_args: &[String],
+    mapped_initrd_size: u64,
+    mount_point: Option<&str>,
+) -> Option<Vec<u8>> {
+    let cmdline = app_args.join(" ");
+    if cmdline.is_empty() && mapped_initrd_size == 0 && mount_point.is_none() {
+        return None;
+    }
+
+    let cmdline_bytes = cmdline.as_bytes();
+    let mut buf = Vec::new();
+    write_cmdline_mount_tlv(&mut buf, cmdline_bytes, mount_point);
+
+    let padded = (buf.len() + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
     buf.resize(padded - 8, 0);
     buf.extend_from_slice(&mapped_initrd_size.to_le_bytes());
     Some(buf)
 }
 
-/// Prepend application arguments as a cmdline header in the initrd.
-pub fn prepend_cmdline_to_initrd(initrd: Option<&[u8]>, app_args: &[String]) -> Option<Vec<u8>> {
+/// Prepend application arguments + optional mount point as a header in the initrd.
+pub fn prepend_cmdline_to_initrd(
+    initrd: Option<&[u8]>,
+    app_args: &[String],
+    mount_point: Option<&str>,
+) -> Option<Vec<u8>> {
     let cmdline = app_args.join(" ");
 
-    if cmdline.is_empty() && initrd.is_none() {
+    if cmdline.is_empty() && initrd.is_none() && mount_point.is_none() {
         return None;
     }
-    if cmdline.is_empty() {
+    if cmdline.is_empty() && mount_point.is_none() {
         return initrd.map(|d| d.to_vec());
     }
 
     let cmdline_bytes = cmdline.as_bytes();
-    let cmdline_len = cmdline_bytes.len() as u32;
-    let header_size = 8 + 4 + cmdline_len as usize + 1;
-    let padded = (header_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let mut buf = Vec::new();
+    write_cmdline_mount_tlv(&mut buf, cmdline_bytes, mount_point);
 
-    let initrd_len = initrd.map(|d| d.len()).unwrap_or(0);
-    let mut buf = Vec::with_capacity(padded + initrd_len);
-    buf.extend_from_slice(CMDLINE_MAGIC);
-    buf.extend_from_slice(&cmdline_len.to_le_bytes());
-    buf.extend_from_slice(cmdline_bytes);
-    buf.push(0);
+    let padded = (buf.len() + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
     buf.resize(padded, 0);
     if let Some(data) = initrd {
         buf.extend_from_slice(data);
@@ -461,18 +555,18 @@ impl FsSandbox {
 }
 
 /// Internal helper: assemble the final tool registry from caller-supplied
-/// tools plus any preopened directories. Returns `None` if neither produces
+/// tools plus any preopened directory. Returns `None` if neither produces
 /// any tools (so the `__dispatch` host function isn't registered in vain).
 fn build_tools(
     user_tools: Option<ToolRegistry>,
-    preopened_dir: Option<&Path>,
+    preopen: Option<&Preopen>,
 ) -> Result<Option<ToolRegistry>> {
-    match (user_tools, preopened_dir) {
+    match (user_tools, preopen) {
         (None, None) => Ok(None),
         (Some(t), None) => Ok(Some(t)),
-        (user, Some(dir)) => {
+        (user, Some(pre)) => {
             let mut registry = user.unwrap_or_default();
-            let fs = FsSandbox::new(dir)?;
+            let fs = FsSandbox::new(&pre.host_dir)?;
             fs.register(&mut registry);
             Ok(Some(registry))
         }
@@ -514,13 +608,17 @@ impl Sandbox {
         app_args: &[String],
         config: VmConfig,
         tools: Option<ToolRegistry>,
-        preopened_dir: Option<&Path>,
+        preopen: Option<&Preopen>,
     ) -> Result<Self> {
         if !kernel_path.exists() {
             return Err(anyhow!("Kernel not found: {:?}", kernel_path));
         }
 
-        let extended_initrd = prepend_cmdline_to_initrd(initrd, app_args);
+        let extended_initrd = prepend_cmdline_to_initrd(
+            initrd,
+            app_args,
+            preopen.map(|p| p.guest_path.as_str()),
+        );
         let env = GuestEnvironment::new(
             GuestBinary::FilePath(kernel_path.to_string_lossy().to_string()),
             extended_initrd.as_deref(),
@@ -528,7 +626,7 @@ impl Sandbox {
 
         let mut usbox = UninitializedSandbox::new(env, Some(config.sandbox_config()))?;
 
-        let tools = build_tools(tools, preopened_dir)?;
+        let tools = build_tools(tools, preopen)?;
 
         // Register tool dispatch host function if tools are provided
         if let Some(tools) = tools {
@@ -554,7 +652,7 @@ impl Sandbox {
         app_args: &[String],
         config: VmConfig,
         tools: Option<ToolRegistry>,
-        preopened_dir: Option<&Path>,
+        preopen: Option<&Preopen>,
     ) -> Result<Self> {
         if !kernel_path.exists() {
             return Err(anyhow!("Kernel not found: {:?}", kernel_path));
@@ -567,8 +665,12 @@ impl Sandbox {
             None => 0,
         };
 
-        // Build init_data with cmdline + mapped file size
-        let cmdline_data = build_cmdline_initdata(app_args, mapped_size);
+        // Build init_data with cmdline + optional mount point + mapped file size
+        let cmdline_data = build_cmdline_initdata(
+            app_args,
+            mapped_size,
+            preopen.map(|p| p.guest_path.as_str()),
+        );
         let env = GuestEnvironment::new(
             GuestBinary::FilePath(kernel_path.to_string_lossy().to_string()),
             cmdline_data.as_deref(),
@@ -584,7 +686,7 @@ impl Sandbox {
             usbox.map_file_cow(path, INITRD_MAP_BASE, Some("initrd"))?;
         }
 
-        let tools = build_tools(tools, preopened_dir)?;
+        let tools = build_tools(tools, preopen)?;
 
         // Register tool dispatch if needed
         if let Some(tools) = tools {
@@ -679,17 +781,18 @@ pub fn run_vm_with_tools(
 
 /// Run a Unikraft kernel with a preopened host directory.
 ///
-/// The guest's `lib/hostfs` mounts `host_dir` at `/host`; unmodified POSIX
-/// calls route through the `FsSandbox` tool handlers. Escape attempts (via
-/// `..` or symlinks that point outside `host_dir`) are rejected host-side.
+/// The guest's `lib/hostfs` mounts `preopen.host_dir` at `preopen.guest_path`;
+/// unmodified POSIX calls route through the `FsSandbox` tool handlers.
+/// Escape attempts (via `..` or symlinks that point outside `host_dir`)
+/// are rejected host-side.
 pub fn run_vm_with_preopen(
     kernel_path: &Path,
     initrd: Option<&[u8]>,
     app_args: &[String],
     config: VmConfig,
-    host_dir: &Path,
+    preopen: &Preopen,
 ) -> Result<()> {
-    let _ = Sandbox::new(kernel_path, initrd, app_args, config, None, Some(host_dir))?;
+    let _ = Sandbox::new(kernel_path, initrd, app_args, config, None, Some(preopen))?;
     Ok(())
 }
 
@@ -852,6 +955,71 @@ mod tests {
         let s = std::str::from_utf8(&resp).unwrap();
         assert!(s.contains("\"error\""), "{s}");
         assert!(s.contains("escapes mount root"), "{s}");
+    }
+
+    #[test]
+    fn preopen_parse_defaults_guest_to_host() {
+        let dir = tmpdir("po1");
+        let p = Preopen::parse_cli(dir.to_str().unwrap()).unwrap();
+        assert_eq!(p.guest_path, "/host");
+        assert_eq!(p.host_dir, std::fs::canonicalize(&dir).unwrap());
+    }
+
+    #[test]
+    fn preopen_parse_accepts_custom_guest_path() {
+        let dir = tmpdir("po2");
+        let spec = format!("{}:/data", dir.display());
+        let p = Preopen::parse_cli(&spec).unwrap();
+        assert_eq!(p.guest_path, "/data");
+    }
+
+    #[test]
+    fn preopen_rejects_reserved_guest_path() {
+        let dir = tmpdir("po3");
+        for reserved in &["/", "/bin", "/dev", "/proc", "/sys", "/usr", "/bin/foo"] {
+            let err = Preopen::new(&dir, *reserved).unwrap_err().to_string();
+            assert!(err.contains("reserved"), "{reserved}: {err}");
+        }
+    }
+
+    #[test]
+    fn preopen_rejects_relative_guest_path() {
+        let dir = tmpdir("po4");
+        let err = Preopen::new(&dir, "relative").unwrap_err().to_string();
+        assert!(err.contains("absolute"), "{err}");
+    }
+
+    fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    #[test]
+    fn initdata_carries_mount_tlv_when_preopen_set() {
+        let buf = build_cmdline_initdata(
+            &["/hello".to_string()],
+            0,
+            Some("/data"),
+        )
+        .expect("initdata");
+        assert!(buf.starts_with(CMDLINE_MAGIC), "cmdline magic missing");
+        let off = find_subslice(&buf, MOUNT_MAGIC).expect("mount magic missing");
+        // Length u32 immediately follows.
+        let len_off = off + MOUNT_MAGIC.len();
+        let mount_len = u32::from_le_bytes(
+            buf[len_off..len_off + 4].try_into().unwrap(),
+        ) as usize;
+        let path_off = len_off + 4;
+        assert_eq!(&buf[path_off..path_off + mount_len], b"/data");
+        assert_eq!(buf[path_off + mount_len], 0, "NUL terminator");
+    }
+
+    #[test]
+    fn initdata_omits_mount_tlv_when_preopen_absent() {
+        let buf = build_cmdline_initdata(&["/hello".to_string()], 0, None)
+            .expect("initdata");
+        assert!(buf.starts_with(CMDLINE_MAGIC));
+        assert!(find_subslice(&buf, MOUNT_MAGIC).is_none(),
+                "no mount TLV expected");
     }
 
     #[test]

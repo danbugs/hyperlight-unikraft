@@ -139,17 +139,26 @@ just run
 
 ### Host filesystem sandbox
 
-Pass `--mount <HOST_DIR>` to expose that directory to the guest:
+`--mount HOST_DIR[:GUEST_PATH]` preopens a host directory for the guest:
 
 ```bash
+# Default: guest-visible at /host
 hyperlight-unikraft kernel --initrd app.cpio --mount ./work
+
+# Custom guest mount point
+hyperlight-unikraft kernel --initrd app.cpio --mount ./work:/data
 ```
 
-`lib/hostfs` in the guest auto-mounts it at `/host`; unmodified POSIX
-calls (`open`, `read`, `write`, `stat`, `mkdir`, `truncate`, …) are
-forwarded by the VFS driver to the host's `FsSandbox` tool handlers.
-Every path is resolved relative to `HOST_DIR` and any attempt to
-escape it (via `..` or symlinks) is rejected host-side.
+`lib/hostfs` in the guest auto-mounts `HOST_DIR` at `GUEST_PATH` (default
+`/host`); unmodified POSIX calls (`open`, `read`, `write`, `stat`,
+`mkdir`, `truncate`, …) are forwarded by the VFS driver to the host's
+`FsSandbox` tool handlers. The guest mount point is advertised runtime
+via an `HLHSMNT` TLV in init_data, so one kernel build can serve
+different mount points. Reserved kernel dirs (`/`, `/bin`, `/dev`,
+`/proc`, `/sys`, `/usr`) are refused to avoid shadowing the initrd.
+
+Every path the guest sends is resolved relative to `HOST_DIR` and any
+escape (via `..` or symlinks) is rejected host-side.
 
 Known limitation: `opendir`/`readdir` don't work yet (see
 [lib/hostfs/README.md](https://github.com/danbugs/unikraft/blob/hyperlight-platform-v0.13.1-rebased/lib/hostfs/README.md)). Stat and enumerate known paths instead.
