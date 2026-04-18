@@ -164,22 +164,17 @@ html = MarkdownIt().render(md)
 print(f"\n[markdown-it] rendered {len(md)} chars of markdown -> {len(html)} chars of HTML")
 
 
-# 11. openpyxl — write an Excel workbook. The guest has no RTC so
-#     time.time() returns 0 (1970); both xlsx's internal zip entries
-#     and openpyxl's metadata insist on >= 1980 timestamps, so we
-#     force every new cell + the workbook metadata to a fixed date.
-import datetime
+# 11. openpyxl — write an Excel workbook. The guest gets real wall
+#     time from the host now (HLWALL0 init_data TLV), so XLSX
+#     timestamps Just Work.
 from openpyxl import Workbook
 
-FIXED_TS = datetime.datetime(2026, 1, 1)
 wb = Workbook()
 ws = wb.active
 ws.title = "scores"
 ws.append(["name", "score", "tag", "pass"])
 for p in processed:
     ws.append([p["name"], p["score"], p["tag"], p["pass"]])
-wb.properties.created = FIXED_TS
-wb.properties.modified = FIXED_TS
 
 
 # 12. pypdf — write a stub PDF with metadata. pypdf alone can't
@@ -199,24 +194,6 @@ writer.add_metadata({
 # 13. Write artifacts out via the host mount (if available).
 OUT = "/host"
 if os.path.isdir(OUT):
-    # The guest has no RTC — time.time() returns 0 (1970), which blows
-    # up zipfile.ZipInfo (ZIP can't represent pre-1980 timestamps and
-    # the constructor raises).
-    #
-    # Pin everything zipfile touches for time to our FIXED_TS:
-    #   - ZipInfo(filename=...) uses time.localtime(time.time())
-    #   - ZipInfo.from_file() reads os.stat().st_mtime then localtime
-    # Easiest fix: patch time.localtime + route from_file through
-    # strict_timestamps=False (clamps to 1980 if it ever slips past).
-    import zipfile, time as _time
-    _orig_localtime = _time.localtime
-    _fixed_struct = _orig_localtime(FIXED_TS.timestamp())
-    _time.localtime = lambda *a, **kw: _fixed_struct
-    _orig_from_file = zipfile.ZipInfo.from_file.__func__
-    def _patched_from_file(cls, filename, arcname=None, *, strict_timestamps=True):
-        return _orig_from_file(cls, filename, arcname, strict_timestamps=False)
-    zipfile.ZipInfo.from_file = classmethod(_patched_from_file)
-
     with open(f"{OUT}/report.md", "w") as f:
         f.write(md)
     wb.save(f"{OUT}/report.xlsx")

@@ -7,13 +7,10 @@ ENV PATH /usr/local/bin:$PATH
 
 RUN set -xe ; \
 	apt update ; \
-	apt install -yqq build-essential ; \
-	apt install -yqq make ; \
-	apt install -yqq curl ; \
-	apt install -yqq tar ; \
-	apt install -yqq libexpat-dev ; \
-	apt install -yqq zlib1g-dev ; \
-	apt install -yqq zlib1g-dev
+	apt install -yqq build-essential make curl tar \
+		libexpat-dev zlib1g-dev libffi-dev libssl-dev \
+		libbz2-dev liblzma-dev libreadline-dev \
+		libsqlite3-dev uuid-dev tk-dev
 
 ARG PYTHON_VERSION=3.12.0
 ENV PYTHON_VERSION ${PYTHON_VERSION}
@@ -105,3 +102,8 @@ COPY --from=base /lib/x86_64-linux-gnu/liblzma.so.5   /lib/x86_64-linux-gnu/libl
 COPY --from=base /lib/x86_64-linux-gnu/libffi.so.8    /lib/x86_64-linux-gnu/libffi.so.8
 COPY --from=base /lib/x86_64-linux-gnu/libssl.so.3    /lib/x86_64-linux-gnu/libssl.so.3
 COPY --from=base /lib/x86_64-linux-gnu/libcrypto.so.3 /lib/x86_64-linux-gnu/libcrypto.so.3
+COPY --from=base /lib/x86_64-linux-gnu/libgcc_s.so.1  /lib/x86_64-linux-gnu/libgcc_s.so.1
+COPY --from=base /lib/x86_64-linux-gnu/libstdc++.so.6 /lib/x86_64-linux-gnu/libstdc++.so.6
+COPY --from=base /lib/x86_64-linux-gnu/librt.so.1     /lib/x86_64-linux-gnu/librt.so.1
+COPY --from=base /lib/x86_64-linux-gnu/libpthread.so.0 /lib/x86_64-linux-gnu/libpthread.so.0
+COPY --from=base /lib/x86_64-linux-gnu/libdl.so.2     /lib/x86_64-linux-gnu/libdl.so.2

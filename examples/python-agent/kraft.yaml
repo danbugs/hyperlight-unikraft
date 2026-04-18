@@ -66,6 +66,18 @@ unikraft:
     CONFIG_LIBUKBOOT_MAINTHREAD: 'y'
     CONFIG_LIBPOSIX_PROCESS_ARCH_PRCTL: 'y'
 
+    # Multiprocess / execve are enabled kernel-side but not used yet:
+    # app-elfloader has a stack-setup bug that crashes the child with
+    # a low-address page fault on any exec (Python → Python, static-PIE
+    # hello → same crash). Kept on because the rest of the kernel
+    # builds fine with it; needs upstream fix before subprocess works.
+    CONFIG_LIBPOSIX_PROCESS_MULTIPROCESS: 'y'
+    CONFIG_LIBPOSIX_PROCESS_EXECVE: 'y'
+    CONFIG_LIBPOSIX_PROCESS_SIGNAL: 'y'
+    CONFIG_LIBUKBINFMT: 'y'
+    CONFIG_APPELFLOADER_MULTIPROCESS: 'y'
+    CONFIG_APPELFLOADER_ELF_BINFMT: 'y'
+
     CONFIG_LIBCONTEXT: 'y'
     CONFIG_LIBCONTEXT_CLEAR_TBSS: 'y'
 

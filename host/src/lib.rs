@@ -24,6 +24,12 @@ const CMDLINE_MAGIC: &[u8; 8] = b"HLCMDLN\0";
 /// cmdline (same init_data page).
 const MOUNT_MAGIC: &[u8; 8] = b"HLHSMNT\0";
 
+/// Magic header for the optional wall-clock-at-boot TLV. Value is a
+/// little-endian u64 of nanoseconds since the Unix epoch. The guest
+/// adds its own monotonic delta at read time, so `time.time()` returns
+/// a sensible wall time without any host round-trip per call.
+const WALLTIME_MAGIC: &[u8; 8] = b"HLWALL0\0";
+
 const PAGE_SIZE: usize = 4096;
 
 /// Guest paths that would shadow the kernel's own ramfs and break the VM.
@@ -166,11 +172,14 @@ pub fn parse_memory(mem_str: &str) -> Result<u64> {
 // Initrd cmdline prepend
 // ---------------------------------------------------------------------------
 
-/// Serialize the shared "cmdline + optional mount point" TLV block into `buf`.
+/// Serialize the shared "cmdline + optional mount point + wall clock" TLV
+/// block into `buf`.
 ///
 /// Layout:
 ///   [HLCMDLN\0][cmdline_len u32][cmdline…][\0]
 ///   [HLHSMNT\0][mount_len u32][mount…][\0]   (only when `mount_point` is set)
+///   [HLWALL0\0][8 u32][wall_ns_le u64]       (always present — the guest
+///                                             clamps to 0 if reading fails)
 ///
 /// Callers are responsible for any trailing padding / metadata (e.g. the
 /// mapped-initrd-size footer used by `build_cmdline_initdata`).
@@ -193,6 +202,16 @@ fn write_cmdline_mount_tlv(
         buf.extend_from_slice(mount_bytes);
         buf.push(0);
     }
+
+    // Wall clock: read the host's time once at VM build time and embed
+    // as ns since epoch. The guest will add its own monotonic delta.
+    let wall_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    buf.extend_from_slice(WALLTIME_MAGIC);
+    buf.extend_from_slice(&8u32.to_le_bytes());
+    buf.extend_from_slice(&wall_ns.to_le_bytes());
 }
 
 /// Build init_data with cmdline + optional hostfs mount point + mapped

@@ -22,9 +22,19 @@ RUN pip install --target=/deps --no-cache-dir \
     python-dotenv \
     pypdf \
     openpyxl \
-    markdown-it-py
+    markdown-it-py \
+    pydantic \
+    pillow \
+    lxml \
+    cryptography \
+    python-dateutil
 
-# Stage 2: layer them onto python-base next to the stdlib.
+# No subprocess-ready binaries yet — the kernel's vfork+execve works,
+# but app-elfloader crashes the child on stack setup (page fault at
+# low addresses during any exec, even Python → Python). Tracked as
+# follow-up work. For now the agent runs as a single process.
+
+# Stage 2: layer deps onto python-base.
 FROM ${BASE} AS rootfs
 COPY --from=deps /deps /usr/local/lib/python3.12/site-packages
 COPY agent.py /agent.py
