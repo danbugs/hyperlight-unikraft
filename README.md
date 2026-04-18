@@ -134,6 +134,19 @@ just run
 | `python` | CPython 3.12 | Rootfs from Docker, script passed via cmdline |
 | `go` | Static PIE Go binary | Compiled with musl via Docker for CGO support |
 | `nodejs` | Node.js 21 | Rootfs from Alpine, script passed via cmdline |
+| `hostfs-c` | C + `/dev/hcall` | Explicit RPC to the host filesystem sandbox |
+| `hostfs-py` | Python | Same as `hostfs-c` wrapped in `hyperlight.py` |
+| `hostfs-posix-c` | C + unmodified POSIX | `open`/`read`/`write`/`mkdir` against `/host`, forwarded by `lib/hostfs` |
+
+### Host filesystem sandbox
+
+Pass `--mount <HOST_DIR>` to expose that directory to the guest:
+
+```bash
+hyperlight-unikraft kernel --initrd app.cpio --mount ./work
+```
+
+Every path passed to `fs_*` tools (or POSIX ops on `/host/…` under `lib/hostfs`) is resolved relative to `HOST_DIR` and any attempt to escape it (via `..` or symlinks) is rejected on the host.
 
 ### Running with Arguments
 
