@@ -55,6 +55,8 @@ jobs:
             kernel: helloworld-hyperlight_hyperlight-x86_64
           - name: hostfs-c
             kernel: hostfs-c-hyperlight_hyperlight-x86_64
+          - name: hostfs-py
+            kernel: hostfs-py-hyperlight_hyperlight-x86_64
           - name: rust
             kernel: rust-hyperlight_hyperlight-x86_64
           - name: go

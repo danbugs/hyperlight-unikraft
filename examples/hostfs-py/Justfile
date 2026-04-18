@@ -1,0 +1,71 @@
+# hostfs-py on Hyperlight
+#
+# Python counterpart to hostfs-c: exercises the host-mediated filesystem
+# sandbox via /dev/hcall, wrapped by the hyperlight module's fs_* helpers.
+# The host is started with `--mount ./work`; every path the guest passes
+# is resolved relative to that directory.
+
+set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
+export DOCKER_BUILDKIT := "0"
+
+kernel      := ".unikraft/build/hostfs-py-hyperlight_hyperlight-x86_64"
+initrd      := "hostfs-py-initrd.cpio"
+memory      := "96Mi"
+image       := "hostfs-py-hyperlight"
+ghcr_kernel := "ghcr.io/danbugs/hyperlight-unikraft/hostfs-py-kernel:latest"
+mount_dir   := "./work"
+
+# Run once
+[unix]
+run:
+    mkdir -p {{mount_dir}}
+    hyperlight-unikraft {{kernel}} --initrd {{initrd}} --memory {{memory}} --mount {{mount_dir}} -- /hostfs_demo.py
+
+[windows]
+run:
+    New-Item -ItemType Directory -Force -Path {{mount_dir}} | Out-Null
+    hyperlight-unikraft {{kernel}} --initrd {{initrd}} --memory {{memory}} --mount {{mount_dir}} -- /hostfs_demo.py
+
+# Run 5 times via snapshot/restore
+[unix]
+run-5:
+    mkdir -p {{mount_dir}}
+    hyperlight-unikraft {{kernel}} --initrd {{initrd}} --repeat 4 --memory {{memory}} --mount {{mount_dir}} -- /hostfs_demo.py
+
+[windows]
+run-5:
+    New-Item -ItemType Directory -Force -Path {{mount_dir}} | Out-Null
+    hyperlight-unikraft {{kernel}} --initrd {{initrd}} --repeat 4 --memory {{memory}} --mount {{mount_dir}} -- /hostfs_demo.py
+
+# Build rootfs via Docker (cross-platform)
+rootfs:
+    docker build --platform linux/amd64 --target cpio -t {{image}}-cpio .
+    - docker rm -f {{image}}-tmp
+    docker create --name {{image}}-tmp {{image}}-cpio /bin/true
+    docker cp {{image}}-tmp:/output.cpio ./{{initrd}}
+    docker rm -f {{image}}-tmp
+
+# Build kernel via kraft (Linux)
+[unix]
+build:
+    -kraft-hyperlight build --plat hyperlight --arch x86_64
+
+# Pull pre-built kernel from GHCR (Windows)
+[windows]
+build:
+    docker pull {{ghcr_kernel}}
+    - docker rm -f {{image}}-kernel-tmp
+    docker create --name {{image}}-kernel-tmp {{ghcr_kernel}} /kernel
+    New-Item -ItemType Directory -Force -Path (Split-Path {{kernel}}) | Out-Null
+    docker cp {{image}}-kernel-tmp:/kernel ./{{kernel}}
+    docker rm -f {{image}}-kernel-tmp
+
+# Clean build artifacts (leaves work/ alone; remove manually if desired)
+[unix]
+clean:
+    rm -rf .unikraft {{initrd}}
+
+[windows]
+clean:
+    if (Test-Path .unikraft) { Remove-Item -Recurse -Force .unikraft }
+    if (Test-Path {{initrd}}) { Remove-Item -Force {{initrd}} }
