@@ -20,8 +20,9 @@ jobs:
       contents: read
       packages: write
     strategy:
+      fail-fast: false
       matrix:
-        runtime: [python, nodejs, dotnet, powershell, shell]
+        runtime: [python, nodejs, powershell, shell]
     steps:
       - uses: actions/checkout@v4
 
@@ -47,6 +48,7 @@ jobs:
       contents: read
       packages: write
     strategy:
+      fail-fast: false
       matrix:
         example:
           - name: helloworld-c
