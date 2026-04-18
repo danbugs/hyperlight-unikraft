@@ -76,7 +76,6 @@ RUN set -xe ; \
 	rm -rf /usr/local/lib/python*/concurrent ; \
 	rm -rf /usr/local/lib/python*/ctypes ; \
 	rm -rf /usr/local/lib/python*/dbm ; \
-	rm -rf /usr/local/lib/python*/json ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_test* ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_codecs_jp* ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_codecs_hk* ; \
@@ -90,7 +89,6 @@ RUN set -xe ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_ctypes* ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/pyexpat* ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_asyncio* ; \
-	rm -rf /usr/local/lib/python*/lib-dynload/_json* ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_lzma* ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/_bz2* ; \
 	rm -rf /usr/local/lib/python*/lib-dynload/unicodedata* ; \
