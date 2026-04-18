@@ -188,6 +188,23 @@ just run-file path/to/myscript.py   # file's contents → --exec
 No `--mount` involved. No `/host/…` path contract. The host just passes
 argv.
 
+#### Passing extra script arguments
+
+`--exec` and positional `-- args` are mutually exclusive (clap enforces
+it at parse time) — they both populate argv, so letting both through
+would silently lose one. If you need inline code *plus* extra `sys.argv`
+arguments, drop back to the raw `--` form and do the quoting yourself:
+
+```bash
+hyperlight-unikraft python-kernel --initrd python.cpio --memory 96Mi \
+    -- -c '"import sys; print(sys.argv[1:])"' alpha beta gamma
+# => ['alpha', 'beta', 'gamma']
+```
+
+The inner `-c` payload is wrapped in outer double-quotes so `uk_argparse`
+preserves whitespace, with internal quotes backslash-escaped. Anything
+after is plain argv.
+
 ### Running with Arguments
 
 For interpreted languages, pass the script path after `--`:
