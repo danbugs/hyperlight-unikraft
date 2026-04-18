@@ -138,7 +138,7 @@ pub extern "C" fn hl_vm_create(config: *const HlConfig) -> *mut HlVm {
     };
 
     // Prepend cmdline to initrd if we have app args
-    let initrd_data = prepend_cmdline_to_initrd(initrd_data.as_deref(), &app_args, None)
+    let initrd_data = prepend_cmdline_to_initrd(initrd_data.as_deref(), &app_args, &[])
         .or(initrd_data);
 
     let vm = Box::new(HlVm {

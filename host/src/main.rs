@@ -40,15 +40,18 @@ struct Args {
     /// Preopen a host directory for the guest's sandboxed filesystem.
     ///
     /// Syntax: `HOST_DIR[:GUEST_PATH]`. When `GUEST_PATH` is omitted the
-    /// default is `/host`. lib/hostfs in the guest auto-mounts `HOST_DIR`
-    /// at `GUEST_PATH`; unmodified POSIX calls (open/read/write/stat/…)
-    /// route through the FsSandbox tool handlers. Guest-supplied paths
-    /// are resolved relative to `HOST_DIR` and any escape (via `..` or
+    /// default is `/host`. Repeatable — pass `--mount` multiple times to
+    /// expose several host directories at distinct guest mount points.
+    ///
+    /// lib/hostfs in the guest auto-mounts `HOST_DIR` at `GUEST_PATH`;
+    /// unmodified POSIX calls (open/read/write/stat/…) route through
+    /// the FsSandbox tool handlers. Guest-supplied paths are resolved
+    /// relative to the matching `HOST_DIR` and any escape (via `..` or
     /// symlinks) is rejected host-side. `GUEST_PATH` must be absolute
     /// and cannot shadow the kernel's own reserved directories
     /// (`/bin`, `/dev`, `/proc`, `/sys`, `/usr`, `/`).
     #[arg(long, value_name = "HOST[:GUEST]")]
-    mount: Option<String>,
+    mount: Vec<String>,
 
     /// Run the application N additional times via snapshot/restore + call.
     /// The first run always happens. --repeat=2 means 3 total runs.
@@ -110,17 +113,28 @@ fn main() -> Result<()> {
         eprintln!("Memory: {heap_size} B, Stack: {stack_size} B");
     }
 
-    let preopen = match args.mount {
-        Some(ref spec) => Some(Preopen::parse_cli(spec)?),
-        None => None,
-    };
+    let preopens: Vec<Preopen> = args
+        .mount
+        .iter()
+        .map(|spec| Preopen::parse_cli(spec))
+        .collect::<Result<_>>()?;
+
+    // Reject duplicate guest paths before the VM boots — two mounts
+    // on the same guest path would silently shadow each other.
+    for i in 0..preopens.len() {
+        for j in (i + 1)..preopens.len() {
+            if preopens[i].guest_path == preopens[j].guest_path {
+                return Err(anyhow::anyhow!(
+                    "duplicate --mount guest path: {:?}",
+                    preopens[i].guest_path
+                ));
+            }
+        }
+    }
 
     if !args.quiet {
-        if let Some(ref p) = preopen {
-            eprintln!(
-                "Preopened: {:?} -> {} (guest)",
-                p.host_dir, p.guest_path
-            );
+        for p in &preopens {
+            eprintln!("Preopened: {:?} -> {} (guest)", p.host_dir, p.guest_path);
         }
     }
 
@@ -142,7 +156,7 @@ fn main() -> Result<()> {
     if let Some(ref p) = args.initrd {
         builder = builder.initrd_file(p);
     }
-    if let Some(p) = preopen {
+    for p in preopens {
         builder = builder.preopen(p);
     }
     if args.enable_tools {
