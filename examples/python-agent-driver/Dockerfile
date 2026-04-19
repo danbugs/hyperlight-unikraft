@@ -29,6 +29,7 @@ COPY hl_pydriver.c /src/hl_pydriver.c
 RUN PY_INC=$(python3.12 -c 'import sysconfig; print(sysconfig.get_path("include"))') && \
     PY_LIBDIR=$(python3.12 -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))') && \
     gcc -O2 -fPIE -pie -Wl,-E \
+        -fno-stack-protector \
         -I$PY_INC \
         -o /src/hl_pydriver /src/hl_pydriver.c \
         -L$PY_LIBDIR \
