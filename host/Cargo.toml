@@ -33,7 +33,7 @@ path = "src/bin/pyhl.rs"
 # is not a multiple of the page size fail to map on Windows. Revert to
 # hyperlight-dev/hyperlight `main` once #1388 merges.
 hyperlight-host = { git = "https://github.com/danbugs/hyperlight", branch = "fix-map-file-cow-unaligned", features = ["executable_heap"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
 memmap2 = "0.9"
 serde_json = "1"
