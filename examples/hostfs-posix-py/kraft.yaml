@@ -3,7 +3,7 @@ name: hostfs-posix-py-hyperlight
 
 unikraft:
   source: https://github.com/danbugs/unikraft.git
-  version: hyperlight-platform-v0.13.1-rebased
+  version: hyperlight-platform
   kconfig:
     # Platform
     CONFIG_PLAT_HYPERLIGHT: 'y'
@@ -74,7 +74,7 @@ unikraft:
 libraries:
   app-elfloader:
     source: https://github.com/danbugs/app-elfloader.git
-    version: hyperlight-platform-v0.13.1-rebased
+    version: hyperlight-platform
   libelf:
     source: https://github.com/unikraft/lib-libelf.git
     version: staging

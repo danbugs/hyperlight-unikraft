@@ -3,7 +3,7 @@ name: python-agent-driver-hyperlight
 
 unikraft:
   source: https://github.com/danbugs/unikraft.git
-  version: hyperlight-platform-v0.13.1-rebased
+  version: hyperlight-platform
   kconfig:
     CONFIG_PLAT_HYPERLIGHT: 'y'
     CONFIG_PAGING: 'n'
@@ -72,7 +72,7 @@ unikraft:
 libraries:
   app-elfloader:
     source: https://github.com/danbugs/app-elfloader.git
-    version: hyperlight-platform-v0.13.1-rebased
+    version: hyperlight-platform
   libelf:
     source: https://github.com/unikraft/lib-libelf.git
     version: staging

@@ -161,7 +161,7 @@ Every path the guest sends is resolved relative to `HOST_DIR` and any
 escape (via `..` or symlinks) is rejected host-side.
 
 Known limitation: `opendir`/`readdir` don't work yet (see
-[lib/hostfs/README.md](https://github.com/danbugs/unikraft/blob/hyperlight-platform-v0.13.1-rebased/lib/hostfs/README.md)). Stat and enumerate known paths instead.
+[lib/hostfs/README.md](https://github.com/danbugs/unikraft/blob/hyperlight-platform/lib/hostfs/README.md)). Stat and enumerate known paths instead.
 
 ### Running ad-hoc code (no initrd rebuild)
 
