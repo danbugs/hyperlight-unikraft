@@ -18,6 +18,10 @@ path = "src/main.rs"
 name = "multifn-test"
 path = "src/bin/multifn_test.rs"
 
+[[bin]]
+name = "pydriver-run"
+path = "src/bin/pydriver_run.rs"
+
 [dependencies]
 # Temporarily point at danbugs/hyperlight fix-map-file-cow-unaligned while
 # hyperlight-dev/hyperlight#1388 is in review. That branch is upstream `main`
