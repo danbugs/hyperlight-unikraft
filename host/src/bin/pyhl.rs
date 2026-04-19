@@ -50,12 +50,14 @@ struct SetupArgs {
     #[arg(long, env = "PYHL_HOME")]
     dest: Option<PathBuf>,
 
-    /// Copy the image from a local python-agent-driver build directory instead
-    /// of downloading. The directory must contain a .unikraft/build tree with
-    /// a compiled kernel and a *-initrd.cpio alongside.
+    /// Install from a local python-agent-driver build directory instead of
+    /// downloading from GHCR. The directory must contain a `.unikraft/build`
+    /// tree with a compiled kernel and a `*-initrd.cpio` alongside —
+    /// typically `examples/python-agent-driver` in a checkout of
+    /// danbugs/hyperlight-unikraft after `just build && just rootfs`.
     ///
-    /// Typical value: path to examples/python-agent-driver in a checkout of
-    /// danbugs/hyperlight-unikraft.
+    /// Without --from, pyhl pulls the pre-published image from GHCR (requires
+    /// docker or podman on $PATH).
     #[arg(long, value_name = "DIR")]
     from: Option<PathBuf>,
 
@@ -150,23 +152,16 @@ fn image_installed(home: &Path) -> bool {
 
 // -- `setup` ------------------------------------------------------------------
 
+/// GHCR OCI image references published by .github/workflows/publish-examples.yml.
+/// Both images are FROM-scratch payloads: kernel image has a single /kernel,
+/// initrd image has a single /initrd.cpio.
+const GHCR_KERNEL_IMAGE: &str =
+    "ghcr.io/danbugs/hyperlight-unikraft/python-agent-driver-kernel:latest";
+const GHCR_INITRD_IMAGE: &str =
+    "ghcr.io/danbugs/hyperlight-unikraft/python-agent-driver-initrd:latest";
+
 fn cmd_setup(args: SetupArgs) -> Result<()> {
     let home = resolve_home(args.dest.as_deref(), ResolveMode::ForSetup)?;
-
-    let from = args.from.as_deref().ok_or_else(|| {
-        anyhow!(
-            "pyhl setup currently requires --from <DIR>.\n\
-             Point it at a built examples/python-agent-driver/ tree:\n  \
-             pyhl setup --from /path/to/hyperlight-unikraft/examples/python-agent-driver\n\
-             (Remote artifact download will be added once GitHub Releases ship the image.)"
-        )
-    })?;
-
-    let (src_kernel, src_initrd) = discover_source_artifacts(from)
-        .with_context(|| format!("scanning {} for image artifacts", from.display()))?;
-
-    fs::create_dir_all(&home)
-        .with_context(|| format!("create image home {}", home.display()))?;
 
     let dst_kernel = home.join(KERNEL_FILE);
     let dst_initrd = home.join(INITRD_FILE);
@@ -182,15 +177,46 @@ fn cmd_setup(args: SetupArgs) -> Result<()> {
         return Ok(());
     }
 
+    fs::create_dir_all(&home)
+        .with_context(|| format!("create image home {}", home.display()))?;
+
+    let (source_label, src_kernel, src_initrd) = match args.from.as_deref() {
+        Some(dir) => {
+            let (k, i) = discover_source_artifacts(dir).with_context(|| {
+                format!("scanning {} for image artifacts", dir.display())
+            })?;
+            (dir.display().to_string(), k, i)
+        }
+        None => {
+            // No --from: pull from GHCR. Uses docker or podman under the hood
+            // because that's the standard OCI client everyone has and avoids
+            // linking an oci-distribution client into pyhl.
+            eprintln!("pyhl: downloading image from GHCR…");
+            let tmp = home.join(".pyhl.download");
+            fs::create_dir_all(&tmp)?;
+            let kernel_path = tmp.join("kernel");
+            let initrd_path = tmp.join("initrd.cpio");
+            extract_from_ghcr(GHCR_KERNEL_IMAGE, "/kernel", &kernel_path)?;
+            extract_from_ghcr(GHCR_INITRD_IMAGE, "/initrd.cpio", &initrd_path)?;
+            (format!("{GHCR_KERNEL_IMAGE} + {GHCR_INITRD_IMAGE}"), kernel_path, initrd_path)
+        }
+    };
+
     copy_replace(&src_kernel, &dst_kernel)
         .with_context(|| format!("install {}", dst_kernel.display()))?;
     copy_replace(&src_initrd, &dst_initrd)
         .with_context(|| format!("install {}", dst_initrd.display()))?;
 
+    // Remove the download scratch dir if we made one.
+    let scratch = home.join(".pyhl.download");
+    if scratch.is_dir() {
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
     let version = format!(
         "pyhl {pyhl_ver}\nsource: {src}\nkernel: {kern}\ninitrd: {initrd}\ninstalled: {ts}\n",
         pyhl_ver = env!("CARGO_PKG_VERSION"),
-        src = from.display(),
+        src = source_label,
         kern = src_kernel.display(),
         initrd = src_initrd.display(),
         ts = now_iso8601(),
@@ -211,6 +237,111 @@ fn copy_replace(src: &Path, dst: &Path) -> Result<()> {
     fs::copy(src, &staging)?;
     fs::rename(&staging, dst)?;
     Ok(())
+}
+
+/// Pull an OCI image from GHCR and extract a single file out of it. The
+/// workflow-published kernel/initrd images are FROM-scratch with a single
+/// payload file at a known path (/kernel or /initrd.cpio), so this is a
+/// straightforward `pull → create → cp → rm` dance.
+///
+/// Uses whichever of `docker` / `podman` is on PATH. Both speak the same
+/// OCI protocol to ghcr.io and need no auth for public pulls.
+fn extract_from_ghcr(image: &str, src_path_in_image: &str, dst: &Path) -> Result<()> {
+    use std::process::Command;
+
+    let tool = find_on_path(&["docker", "podman"]).ok_or_else(|| {
+        anyhow!(
+            "need `docker` or `podman` on $PATH to pull the pyhl image from GHCR.\n\
+             alternatives: install one of them, or use `pyhl setup --from <local-dir>`"
+        )
+    })?;
+
+    let run = |cmd: &mut Command, label: &str| -> Result<std::process::Output> {
+        let out = cmd.output().with_context(|| format!("spawn {tool} {label}"))?;
+        if !out.status.success() {
+            bail!(
+                "{tool} {label} failed (exit {:?}): {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(out)
+    };
+
+    eprintln!("pyhl:   pull {image}");
+    run(Command::new(tool).args(["pull", image]), "pull")?;
+
+    // Pick a container name unlikely to collide with user containers.
+    let cname = format!("pyhl-extract-{}", std::process::id());
+    let _ = Command::new(tool).args(["rm", "-f", &cname]).output();
+
+    let create_out = run(
+        Command::new(tool).args(["create", "--name", &cname, image, "/bogus-entry"]),
+        "create",
+    )?;
+    let _ = String::from_utf8_lossy(&create_out.stdout);
+
+    let cleanup = scopeguard_cleanup(tool, &cname);
+
+    run(
+        Command::new(tool).args([
+            "cp",
+            &format!("{cname}:{src_path_in_image}"),
+            dst.to_str().expect("dst is utf-8"),
+        ]),
+        "cp",
+    )?;
+
+    drop(cleanup);
+    Ok(())
+}
+
+/// Minimal "run this on drop" helper so the tmp container always gets
+/// removed, even if `cp` fails partway through.
+fn scopeguard_cleanup(tool: &str, cname: &str) -> CleanupContainer {
+    CleanupContainer {
+        tool: tool.to_string(),
+        cname: cname.to_string(),
+    }
+}
+
+struct CleanupContainer {
+    tool: String,
+    cname: String,
+}
+impl Drop for CleanupContainer {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new(&self.tool)
+            .args(["rm", "-f", &self.cname])
+            .output();
+    }
+}
+
+/// Return the first name in `names` that is present as an executable on the
+/// user's PATH. Avoids a `which` crate dep — we only need a boolean check.
+fn find_on_path(names: &[&'static str]) -> Option<&'static str> {
+    let path = std::env::var_os("PATH")?;
+    for name in names {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join(name);
+            if let Ok(md) = candidate.metadata() {
+                if md.is_file() {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if md.permissions().mode() & 0o111 != 0 {
+                            return Some(name);
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        return Some(name);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Given a python-agent-driver directory, find the built kernel (under

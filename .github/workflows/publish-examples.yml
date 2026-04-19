@@ -75,6 +75,8 @@ jobs:
             kernel: dotnet-nativeaot-hyperlight_hyperlight-x86_64
           - name: powershell
             kernel: powershell-hyperlight_hyperlight-x86_64
+          - name: python-agent-driver
+            kernel: python-agent-driver-hyperlight_hyperlight-x86_64
     steps:
       - uses: actions/checkout@v4
 
@@ -120,4 +122,40 @@ jobs:
           COPY ${{ matrix.example.name }}/.unikraft/build/${{ matrix.example.kernel }} /kernel
           DEOF
           docker build -f /tmp/Dockerfile.kernel -t $IMAGE .
+          docker push $IMAGE
+
+  # Publish the python-agent-driver rootfs CPIO as its own image so
+  # `pyhl setup` can pull the initrd (and kernel, above) from GHCR
+  # without having to build the driver image locally.
+  publish-pyhl-initrd:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build python-agent-driver rootfs (CPIO)
+        working-directory: examples/python-agent-driver
+        env:
+          DOCKER_BUILDKIT: '0'
+        run: |
+          just rootfs
+
+      - name: Publish initrd image
+        working-directory: examples/python-agent-driver
+        run: |
+          IMAGE=${{ env.IMAGE_BASE }}/python-agent-driver-initrd:latest
+          cat > /tmp/Dockerfile.initrd << DEOF
+          FROM scratch
+          COPY python-agent-driver-initrd.cpio /initrd.cpio
+          DEOF
+          docker build -f /tmp/Dockerfile.initrd -t $IMAGE .
           docker push $IMAGE
