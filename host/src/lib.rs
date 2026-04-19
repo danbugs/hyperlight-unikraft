@@ -1084,6 +1084,44 @@ impl Sandbox {
         let _: () = self.inner.call("run", ())?;
         Ok(())
     }
+
+    /// Call a named guest function with typed parameters.
+    ///
+    /// Thin passthrough to [`MultiUseSandbox::call`] so callers can take
+    /// advantage of Hyperlight's multi-function dispatch when the loaded
+    /// ELF uses it (e.g. registering an `init` for one-time warm-up and
+    /// a `run` for per-call work — see the FC-aware dispatch callback in
+    /// plat/hyperlight/dispatch.c).
+    ///
+    /// Requires a prior `restore()` to reset guest state to the snapshot
+    /// the caller wants to run against.
+    pub fn call_named<Output, Args>(
+        &mut self,
+        func_name: &str,
+        args: Args,
+    ) -> Result<Output>
+    where
+        Output: hyperlight_host::func::SupportedReturnType,
+        Args: hyperlight_host::func::ParameterTuple,
+    {
+        Ok(self.inner.call(func_name, args)?)
+    }
+
+    /// Take a new snapshot of the current guest state.
+    ///
+    /// Useful for the "snapshot after one-time warm-up" pattern: call
+    /// `init` once to set up expensive state (e.g. `Py_Initialize` +
+    /// heavy imports), then snapshot_now() here to capture the post-
+    /// warm-up memory. Subsequent `restore()` calls will return the VM
+    /// to this warm state, so per-call work skips the warm-up entirely.
+    ///
+    /// After this call, future `restore()` calls rewind to the *new*
+    /// snapshot rather than the post-evolve one.
+    pub fn snapshot_now(&mut self) -> Result<()> {
+        let snap = self.inner.snapshot()?;
+        self.snapshot = Some(snap);
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
