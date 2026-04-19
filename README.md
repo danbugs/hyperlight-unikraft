@@ -95,6 +95,43 @@ just rootfs     # build the rootfs CPIO via Docker
 just run
 ```
 
+### Python on Hyperlight with `pyhl`
+
+For Python workloads specifically, the `pyhl` binary wraps the
+`python-agent-driver` image (kernel + CPIO with numpy/pandas/pydantic/
+yaml/jinja2/bs4/tabulate/click/tenacity/tqdm/openpyxl/pypdf/markdown-it-py/
+pillow/lxml/cryptography/dateutil/dotenv preloaded) behind a simple
+`setup` / `run` workflow:
+
+```bash
+# One-time: build the driver image (kernel + CPIO)
+cd examples/python-agent-driver
+just rootfs && just build
+cd ../..
+
+# Install pyhl
+cargo install --git https://github.com/danbugs/hyperlight-unikraft \
+    hyperlight-unikraft-host --bin pyhl
+
+# Point pyhl at the image you just built — creates ./.pyhl/ in cwd
+pyhl setup --from examples/python-agent-driver
+
+# Run Python
+pyhl run -c 'import pandas as pd; print(pd.DataFrame({"x":[1,2,3]}).sum().to_dict())'
+pyhl run my_script.py
+pyhl run my_script.py --repeat 4      # 5 hermetic invocations
+```
+
+Each `pyhl run` process pays a ~10s cold start (kernel boot + Py_Initialize
++ preloaded imports) once, then every user invocation (including the
+first) runs hermetic at ~100ms — the driver snapshots the post-warmup
+state and restores between calls, so `__main__` globals and `sys.modules`
+don't leak between runs.
+
+`pyhl setup` is idempotent — re-running reports the existing install and
+exits 0; pass `--force` to overwrite. Artifacts are found via
+`--dest`/`$PYHL_HOME` / `./.pyhl/` / `~/.local/share/pyhl/`, in that order.
+
 ### Windows — from scratch
 
 ```powershell
