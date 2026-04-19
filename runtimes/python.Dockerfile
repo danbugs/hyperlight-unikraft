@@ -4,10 +4,12 @@
 FROM ubuntu:22.04 as base
 
 ENV PATH /usr/local/bin:$PATH
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
 
 RUN set -xe ; \
 	apt update ; \
-	apt install -yqq build-essential make curl tar \
+	apt install -yqq --no-install-recommends build-essential make curl tar ca-certificates \
 		libexpat-dev zlib1g-dev libffi-dev libssl-dev \
 		libbz2-dev liblzma-dev libreadline-dev \
 		libsqlite3-dev uuid-dev tk-dev
