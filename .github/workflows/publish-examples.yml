@@ -7,6 +7,7 @@ on:
     paths:
       - 'examples/**'
       - 'runtimes/**'
+      - '.github/workflows/publish-examples.yml'
 
 env:
   REGISTRY: ghcr.io
