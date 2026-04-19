@@ -15,8 +15,8 @@ examples/python/python
 rootfs/
 
 # .NET build artifacts
-bin/
-obj/
+examples/**/bin/
+examples/**/obj/
 
 # IDE
 .vscode/

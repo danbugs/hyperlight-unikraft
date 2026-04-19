@@ -14,6 +14,10 @@ crate-type = ["lib", "cdylib", "staticlib"]
 name = "hyperlight-unikraft"
 path = "src/main.rs"
 
+[[bin]]
+name = "multifn-test"
+path = "src/bin/multifn_test.rs"
+
 [dependencies]
 # Temporarily point at danbugs/hyperlight fix-map-file-cow-unaligned while
 # hyperlight-dev/hyperlight#1388 is in review. That branch is upstream `main`
