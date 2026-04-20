@@ -158,9 +158,7 @@ jobs:
               -f runtimes/python.Dockerfile runtimes/
 
       - name: Install just
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y just || cargo install just
+        uses: extractions/setup-just@v2
 
       - name: Build python-agent-driver rootfs (CPIO)
         working-directory: examples/python-agent-driver

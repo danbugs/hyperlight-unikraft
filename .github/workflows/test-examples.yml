@@ -98,13 +98,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build toolchain
+      - name: Install Go (for kraft-hyperlight)
         run: |
-          # Go (for kraft-hyperlight)
           curl -sL https://go.dev/dl/go1.25.1.linux-amd64.tar.gz | sudo tar -C /usr/local -xz
           echo "/usr/local/go/bin" >> $GITHUB_PATH
-          # Rust is preinstalled on GitHub runners
-          cargo install just
+
+      - name: Install just
+        uses: extractions/setup-just@v2
 
       - name: Build kraft-hyperlight
         run: |
