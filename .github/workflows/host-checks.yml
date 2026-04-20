@@ -29,8 +29,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        run: rustup toolchain install stable --component rustfmt,clippy
+      - name: Install Rust components for pinned toolchain
+        # The repo pins 1.89.0 via rust-toolchain.toml. cargo fmt / clippy
+        # use the pinned channel, so install their components there.
+        run: |
+          channel=$(grep '^channel' rust-toolchain.toml | awk -F\" '{print $2}')
+          rustup component add --toolchain "$channel" rustfmt clippy
 
       - name: Cargo fmt (check only)
         run: cargo fmt --all -- --check
