@@ -1,7 +1,59 @@
 //! hyperlight-unikraft: run Unikraft kernels on Hyperlight
 //!
-//! Provides a `Sandbox` wrapper around Hyperlight's `MultiUseSandbox` that
-//! manages the kernel lifecycle: create → evolve (init) → snapshot → call.
+//! Provides a [`Sandbox`] wrapper around Hyperlight's `MultiUseSandbox`
+//! that manages the kernel lifecycle: create → evolve (init) → snapshot
+//! → call.
+//!
+//! # Quick start
+//!
+//! ```no_run
+//! use hyperlight_unikraft::Sandbox;
+//! # fn main() -> anyhow::Result<()> {
+//! let mut sbox = Sandbox::builder("./kernel")
+//!     .initrd_file("./initrd.cpio")
+//!     .heap_size(256 * 1024 * 1024)
+//!     .build()?;
+//! sbox.restore()?;
+//! sbox.call_run()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Snapshot lifecycle
+//!
+//! The sandbox keeps a live snapshot and lets you rewind to it. This
+//! underpins [`pyhl`]'s fast cold start and every hermetic-per-call
+//! pattern.
+//!
+//! ```text
+//!   Sandbox::builder(..).build()   →  evolve (boot + init); post-evolve snapshot captured
+//!                   │
+//!                   ▼
+//!              sbox.restore()      ←──┐  rewind to snapshot
+//!                   │                 │
+//!                   ▼                 │
+//!              sbox.call_*(..)        │  dispatch (hermetic via restore)
+//!                   │                 │
+//!                   └─────────────────┘
+//! ```
+//!
+//! After a warmup `call_*`, use [`Sandbox::snapshot_now`] to capture
+//! post-warmup state — subsequent `restore()` rewinds to that point,
+//! skipping the warmup on every call.
+//!
+//! To persist across processes:
+//!
+//! - [`Sandbox::save_snapshot`] writes the current snapshot to disk.
+//! - [`Sandbox::from_snapshot_file`] recreates a sandbox straight from
+//!   the file on disk, bypassing evolve entirely. This is how
+//!   `pyhl run` starts in ~200ms without re-doing `Py_Initialize`.
+//!
+//! # Host filesystem
+//!
+//! The guest can access host directories via [`Preopen`] + the
+//! `__dispatch` RPC. [`FsSandbox`] rejects path-escape attempts and
+//! `normalize_fs_error` rewrites host-OS-specific error wording so
+//! the cross-platform Unikraft guest classifies errors uniformly.
 
 pub mod ffi;
 pub mod pyhl;
@@ -125,11 +177,14 @@ impl Default for VmConfig {
 }
 
 impl VmConfig {
+    /// Set the guest heap size in bytes. Convenience chainable setter
+    /// for building a `VmConfig` inline.
     pub fn with_heap_size(mut self, size: u64) -> Self {
         self.heap_size = size;
         self
     }
 
+    /// Set the guest stack size in bytes. Chainable setter.
     pub fn with_stack_size(mut self, size: u64) -> Self {
         self.stack_size = size;
         self
@@ -276,12 +331,18 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    /// Create an empty registry. Add handlers with
+    /// [`register`](Self::register) before wiring it into a sandbox.
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
         }
     }
 
+    /// Register a named handler. The handler receives the JSON-encoded
+    /// `args` payload the guest sent and returns a `serde_json::Value`
+    /// that becomes the `{"result": ...}` portion of the response.
+    /// Errors returned by the handler become `{"error": "..."}`.
     pub fn register<F>(&mut self, name: &str, handler: F)
     where
         F: Fn(serde_json::Value) -> Result<serde_json::Value> + Send + Sync + 'static,
@@ -289,6 +350,17 @@ impl ToolRegistry {
         self.tools.insert(name.to_string(), Box::new(handler));
     }
 
+    /// Decode a guest-side `__dispatch` request, look up the handler by
+    /// name, invoke it, and encode the response as JSON bytes.
+    ///
+    /// The request shape is `{"name": "...", "args": <value>}`, and the
+    /// response is either `{"result": <value>}` or `{"error": "<msg>"}`.
+    /// Unknown tool names and JSON errors both become error responses;
+    /// this function never panics.
+    ///
+    /// Set `HL_DISPATCH_DEBUG=1` in the environment to dump each call's
+    /// payload and result to stderr — useful when diagnosing
+    /// guest/host protocol mismatches.
     pub fn dispatch(&self, payload: &[u8]) -> Vec<u8> {
         let debug = std::env::var("HL_DISPATCH_DEBUG")
             .ok()
@@ -424,6 +496,8 @@ impl FsSandbox {
         Ok(Self { root })
     }
 
+    /// The canonicalized host-side root directory. All guest-supplied
+    /// paths are resolved relative to this; escapes are rejected.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -488,7 +562,24 @@ impl FsSandbox {
         Ok(out)
     }
 
-    /// Register all FS tool handlers (`fs_read`, `fs_write`, …) on `registry`.
+    /// Register all FS tool handlers on `registry`:
+    ///
+    /// - `fs_read` / `fs_write` — UTF-8 text read/write (whole-file).
+    /// - `fs_read_bytes` / `fs_write_bytes` — binary read/write with
+    ///   optional offset/length/append, base64-encoded payloads.
+    /// - `fs_list` — directory enumeration as `{name, is_dir, is_file, is_symlink}`.
+    /// - `fs_stat` — size + file/dir metadata.
+    /// - `fs_mkdir` / `fs_unlink` — create/remove directory or file.
+    /// - `fs_truncate` — set file length.
+    ///
+    /// Every handler resolves its `path` argument under [`root`](Self::root)
+    /// via `FsSandbox::resolve`, which rejects `..` escapes, absolute
+    /// paths that climb outside the root, and symlinks pointing outside.
+    ///
+    /// The handlers call through `std::fs`, which behaves differently on
+    /// Linux and Windows — `normalize_fs_error` smooths out the error
+    /// wording before responses go back to the guest, so the Unikraft
+    /// guest's substring-matching classifier works on both hosts.
     pub fn register(self, registry: &mut ToolRegistry) {
         use serde_json::json;
 

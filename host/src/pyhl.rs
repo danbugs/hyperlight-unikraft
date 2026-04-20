@@ -8,7 +8,7 @@
 //!   in the image home.
 //!
 //! - [`Runtime`] — the steady-state object: holds an open
-//!   [`Sandbox`](crate::Sandbox) loaded from the persisted snapshot, and
+//!   [`crate::Sandbox`] loaded from the persisted snapshot, and
 //!   exposes [`run_code`](Runtime::run_code) /
 //!   [`run_script`](Runtime::run_script) for every subsequent invocation.
 //!   Mounts can be supplied per runtime (one `Runtime`, many `run_*`
