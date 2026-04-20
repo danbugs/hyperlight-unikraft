@@ -1152,9 +1152,45 @@ impl Sandbox {
     /// a 2.5 GB snapshot — enough to double the whole `pyhl run` wall
     /// time on simple scripts.
     pub fn from_snapshot_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::from_snapshot_file_with(path, &[])
+    }
+
+    /// Load a previously-persisted snapshot and register a
+    /// preopen-backed `__dispatch` host function on the loaded sandbox,
+    /// so guest code that does file I/O through `lib/hostfs` has
+    /// working RPC paths.
+    ///
+    /// The snapshot must have been taken while the guest had hostfs
+    /// mounted at each preopen's guest_path (i.e. `pyhl setup` was
+    /// invoked with the same guest_paths). At run time only the
+    /// `host_dir` side is remapped — the guest-side mount point is
+    /// fixed at setup time because it lives in the snapshot's memory
+    /// image.
+    pub fn from_snapshot_file_with<P: AsRef<Path>>(
+        path: P,
+        preopens: &[Preopen],
+    ) -> Result<Self> {
         let loaded = Snapshot::from_file_unchecked(path.as_ref())?;
         let arc = Arc::new(loaded);
-        let inner = MultiUseSandbox::from_snapshot(arc.clone())?;
+        let mut inner = MultiUseSandbox::from_snapshot(arc.clone())?;
+
+        // Wire up the fs_* tool handlers against the caller's preopens.
+        // The snapshot was warmed up with hostfs already mounted, so the
+        // guest will route fs_* calls through __dispatch → the FsRouter
+        // we install here.
+        if !preopens.is_empty() {
+            if let Some(tools) = build_tools(None, preopens)? {
+                let tools = Arc::new(tools);
+                let tools_ref = tools.clone();
+                inner.register_host_function(
+                    "__dispatch",
+                    move |payload: Vec<u8>| -> Vec<u8> {
+                        tools_ref.dispatch(&payload)
+                    },
+                )?;
+            }
+        }
+
         Ok(Self {
             inner,
             snapshot: Some(arc),

@@ -22,10 +22,16 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use hyperlight_unikraft::Sandbox;
+use hyperlight_unikraft::{Preopen, Sandbox};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+/// Parse a `--mount HOST[:GUEST]` argument to a `Preopen`. Default guest
+/// path is `/host` when omitted.
+fn parse_mount(spec: &str) -> Result<Preopen> {
+    Preopen::parse_cli(spec).map_err(|e| anyhow!("invalid --mount {:?}: {}", spec, e))
+}
 
 #[derive(Parser)]
 #[command(name = "pyhl", version, about = "Run Python on hyperlight-unikraft")]
@@ -64,6 +70,17 @@ struct SetupArgs {
     /// Overwrite an existing installed image without prompting.
     #[arg(long)]
     force: bool,
+
+    /// Expose a host directory to the guest at a fixed guest path.
+    /// Format: HOST_DIR[:GUEST_PATH] (default GUEST_PATH is `/host`).
+    /// Repeat for multiple mounts.
+    ///
+    /// The *guest path* is baked into the persisted snapshot (the guest
+    /// mounts hostfs during warmup), so `pyhl run --mount` can only
+    /// remap the host side later — the guest path must match what was
+    /// given to `setup`.
+    #[arg(long = "mount", value_name = "HOST[:GUEST]")]
+    mounts: Vec<String>,
 }
 
 #[derive(Args)]
@@ -83,6 +100,13 @@ struct RunArgs {
     /// Override the image directory.
     #[arg(long, env = "PYHL_HOME", value_name = "DIR")]
     dest: Option<PathBuf>,
+
+    /// Expose a host directory to the guest for this run. Same format
+    /// as `pyhl setup --mount`. The guest-path must match what was
+    /// baked into the snapshot at setup time; only the host side is
+    /// remappable per-run.
+    #[arg(long = "mount", value_name = "HOST[:GUEST]")]
+    mounts: Vec<String>,
 
     /// Print evolve/warmup/per-run timing to stderr. Off by default so the
     /// user's script output is clean.
@@ -226,13 +250,27 @@ fn cmd_setup(args: SetupArgs) -> Result<()> {
     // will MultiUseSandbox::from_snapshot() this file, which skips both
     // kernel boot (evolve) and the 3.5s Python warmup — the whole cost
     // is paid here, once.
+    //
+    // If --mount was passed, also tell the guest to mount hostfs at the
+    // given guest path(s) during boot. The guest-side mount point is
+    // baked into the snapshot's memory image; at `pyhl run --mount` the
+    // host_dir side is remappable but the guest path is fixed.
+    let setup_preopens: Vec<Preopen> = args
+        .mounts
+        .iter()
+        .map(|m| parse_mount(m))
+        .collect::<Result<_>>()?;
+
     eprintln!("pyhl: warming up Python and persisting snapshot…");
     let t_warm = Instant::now();
     {
-        let mut sbox = Sandbox::builder(&dst_kernel)
+        let mut builder = Sandbox::builder(&dst_kernel)
             .initrd_file(&dst_initrd)
-            .heap_size(2 * 1024 * 1024 * 1024)
-            .build()?;
+            .heap_size(2 * 1024 * 1024 * 1024);
+        for p in &setup_preopens {
+            builder = builder.preopen(p.clone());
+        }
+        let mut sbox = builder.build()?;
         sbox.restore()?;
         let _: () = sbox.call_named("run", "pass".to_string())?;
         sbox.snapshot_now()?;
@@ -469,8 +507,20 @@ fn cmd_run(args: RunArgs) -> Result<()> {
         ));
     }
 
+    // If --mount was passed, parse the specs and register fs_* host
+    // handlers on the loaded sandbox so guest file I/O routes back here.
+    let run_preopens: Vec<Preopen> = args
+        .mounts
+        .iter()
+        .map(|m| parse_mount(m))
+        .collect::<Result<_>>()?;
+
     let t_load = Instant::now();
-    let mut sandbox = Sandbox::from_snapshot_file(&snapshot)?;
+    let mut sandbox = if run_preopens.is_empty() {
+        Sandbox::from_snapshot_file(&snapshot)?
+    } else {
+        Sandbox::from_snapshot_file_with(&snapshot, &run_preopens)?
+    };
     if args.verbose {
         eprintln!(
             "[pyhl] load_snapshot={:.1}ms",
