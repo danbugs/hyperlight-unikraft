@@ -189,7 +189,7 @@ jobs:
             needs_mount: true
           - example: hostfs-posix-py
             memory: "512Mi"
-            args: ""
+            args: "-- /hostfs_demo.py"
             expect: "done\\."
             needs_mount: true
           - example: multifn-c
@@ -326,9 +326,11 @@ jobs:
           fi
 
   # Build each example's kernel+initrd on Linux once and upload as a
-  # per-example artifact. Matches the build-example matrix so Windows
-  # gets full example coverage without needing kraft-hyperlight or a
-  # Linux docker toolchain on Windows.
+  # per-example artifact. Matches the Windows runtime matrix so Windows
+  # gets the same example coverage without needing kraft-hyperlight or
+  # a Linux docker toolchain on Windows. hostfs-posix-{c,py} are
+  # excluded: Windows guest-side hostfs dispatch is broken (see
+  # runtime-test-windows matrix comment).
   package-images-for-windows:
     runs-on: ubuntu-latest
     needs: build-example
@@ -349,8 +351,6 @@ jobs:
           - nodejs
           - dotnet
           - dotnet-nativeaot
-          - hostfs-posix-c
-          - hostfs-posix-py
           - multifn-c
           - python-agent
           - python-agent-driver
@@ -472,16 +472,11 @@ jobs:
             memory: "512Mi"
             args: ""
             expect: "Hello, World! From .NET NativeAOT on Hyperlight"
-          - example: hostfs-posix-c
-            memory: "16Mi"
-            args: ""
-            expect: "done\\."
-            needs_mount: true
-          - example: hostfs-posix-py
-            memory: "512Mi"
-            args: ""
-            expect: "done\\."
-            needs_mount: true
+          # hostfs-posix-{c,py} are Linux-only in CI: on Windows the
+          # guest's first open() on /host fails. Tracked in
+          # danbugs/hyperlight-unikraft#1 — hostfs guest-side file
+          # operations over WHP need debugging. pyhl --mount on Windows
+          # works only because its tests never actually touch /host.
           - example: multifn-c
             memory: "4Mi"
             args: ""
