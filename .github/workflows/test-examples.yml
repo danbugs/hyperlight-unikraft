@@ -549,3 +549,135 @@ jobs:
             Write-Error "FAIL: did not match /$expect/"
             exit 1
           }
+
+  # pyhl snapshot-to-disk end-to-end — runs the exact same flow on both
+  # Linux and Windows:
+  #   1. pyhl setup --from <src-dir>   (warmup + persist snapshot)
+  #   2. pyhl run hi.py                (hello)
+  #   3. pyhl run pandas_test.py       (pandas — exercises the warm snapshot)
+  #   4. pyhl run --repeat 4 pandas    (hermetic rewind, 5 iterations)
+  # Both OSes consume the python-agent-driver image built on Linux in
+  # package-images-for-windows. This is the real CoW/restore regression
+  # gate — MAP_PRIVATE on Linux and PAGE_WRITECOPY+FILE_MAP_COPY on
+  # Windows both have to stay working.
+  pyhl-snapshot-test:
+    needs: package-images-for-windows
+    permissions:
+      contents: read
+      packages: read
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Linux needs /dev/kvm access to run the guest.
+      - name: Enable KVM permissions (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Check KVM availability (Linux only)
+        if: runner.os == 'Linux'
+        id: kvm_check
+        run: |
+          if [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+            ls -la /dev/kvm
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "::warning::/dev/kvm is not available; pyhl test skipped"
+          fi
+
+      - name: Install pyhl
+        shell: pwsh
+        run: |
+          cargo install --git https://github.com/${{ github.repository }} `
+            --branch ${{ github.head_ref || github.ref_name }} `
+            hyperlight-unikraft-host `
+            --bin pyhl `
+            --locked --force
+
+      - name: Download prebuilt python-agent-driver image
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-image-python-agent-driver
+          path: pyhl-image
+
+      # `pyhl setup --from` expects a build-tree shape:
+      #   <dir>/.unikraft/build/*_hyperlight-x86_64
+      #   <dir>/*-initrd.cpio
+      - name: Lay out pyhl setup source dir (Linux)
+        if: runner.os == 'Linux' && steps.kvm_check.outputs.available == 'true'
+        run: |
+          mkdir -p src-dir/.unikraft/build
+          mv pyhl-image/kernel src-dir/.unikraft/build/pyhl-kernel_hyperlight-x86_64
+          mv pyhl-image/initrd.cpio src-dir/pyhl-initrd.cpio
+          ls -laR src-dir
+
+      - name: Lay out pyhl setup source dir (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-dir/.unikraft/build | Out-Null
+          Move-Item pyhl-image/kernel src-dir/.unikraft/build/pyhl-kernel_hyperlight-x86_64
+          Move-Item pyhl-image/initrd.cpio src-dir/pyhl-initrd.cpio
+          Get-ChildItem -Recurse src-dir
+
+      - name: pyhl setup --from (warms up + persists snapshot)
+        if: runner.os == 'Windows' || steps.kvm_check.outputs.available == 'true'
+        shell: pwsh
+        run: pyhl setup --from src-dir --force
+
+      - name: pyhl run (hello)
+        if: runner.os == 'Windows' || steps.kvm_check.outputs.available == 'true'
+        shell: pwsh
+        run: |
+          "print('hello from pyhl CI')" | Out-File -Encoding ascii hi.py
+          $out = pyhl run -v hi.py 2>&1
+          Write-Host $out
+          if ($out -match 'hello from pyhl CI') {
+            Write-Host "PASS: matched /hello from pyhl CI/"
+          } else {
+            Write-Error "FAIL: did not match /hello from pyhl CI/"
+            exit 1
+          }
+
+      - name: pyhl run (pandas — exercises the warm snapshot)
+        if: runner.os == 'Windows' || steps.kvm_check.outputs.available == 'true'
+        shell: pwsh
+        run: |
+          @"
+          import pandas as pd, numpy as np
+          df = pd.DataFrame({'x': np.arange(5)})
+          print('pandas_ok:', df.sum().to_dict())
+          "@ | Out-File -Encoding ascii pandas_test.py
+          $out = pyhl run -v pandas_test.py 2>&1
+          Write-Host $out
+          if ($out -match 'pandas_ok:') {
+            Write-Host "PASS: matched /pandas_ok:/"
+          } else {
+            Write-Error "FAIL: did not match /pandas_ok:/"
+            exit 1
+          }
+
+      - name: pyhl run --repeat 4 (exercise hermetic rewind)
+        if: runner.os == 'Windows' || steps.kvm_check.outputs.available == 'true'
+        shell: pwsh
+        run: |
+          $out = pyhl run -v --repeat 4 pandas_test.py 2>&1
+          Write-Host $out
+          # Expect the pandas output five times (run 1/5 .. run 5/5)
+          $hits = ($out | Select-String -Pattern 'pandas_ok:' -AllMatches).Matches.Count
+          if ($hits -ge 5) {
+            Write-Host "PASS: --repeat produced $hits pandas_ok lines"
+          } else {
+            Write-Error "FAIL: expected >=5 pandas_ok lines, got $hits"
+            exit 1
+          }
