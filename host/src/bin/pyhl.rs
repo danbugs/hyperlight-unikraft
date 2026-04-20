@@ -60,16 +60,17 @@ const PREIMPORTED_MODULES: &[&str] = &[
 ];
 
 /// Build the long-about blurb shown by `pyhl --help`. Lists the
-/// pre-imported modules so users can tell at a glance which
-/// `import`s will be "free" in their scripts.
+/// third-party modules the warmup explicitly pre-imports.
 fn long_about() -> String {
     let mut s = String::from(
         "Run Python on hyperlight-unikraft.\n\n\
          `pyhl setup` installs the python-agent-driver image and warms \
          up a Python interpreter snapshot so `pyhl run` can start in \
          ~100 ms hermetic per call (no Py_Initialize, no re-imports).\n\n\
-         The warmed-up snapshot already has these modules in sys.modules — \
-         your scripts can `import` them with zero cost:\n",
+         The full CPython standard library is available (os, shutil, \
+         json, re, pathlib, sqlite3, subprocess shims, …). On top of \
+         that, these third-party modules are pre-imported during \
+         warmup, so your scripts can `import` them with zero cost:\n",
     );
     // Three columns of names, padded to 18 chars, to keep the help
     // readable in an 80-col terminal.
@@ -81,8 +82,9 @@ fn long_about() -> String {
     }
     s.push_str(
         "\n\n\
-         Anything you `import` beyond this set still works — it just \
-         pays the usual import cost on first access.",
+         Other third-party packages shipped in the rootfs still work — \
+         they just pay the usual import cost on first access. Packages \
+         not in the rootfs will raise ModuleNotFoundError.",
     );
     s
 }
