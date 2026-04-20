@@ -508,6 +508,20 @@ fn cmd_run(args: RunArgs) -> Result<()> {
 // -- main ---------------------------------------------------------------------
 
 fn main() -> Result<()> {
+    // On Windows, hyperlight's surrogate-process manager pre-spawns
+    // HYPERLIGHT_INITIAL_SURROGATES Windows processes (default 512)
+    // the first time any sandbox is created. At ~7ms per CreateProcessA
+    // that's ~3.5s of amortised cost we pay on every `pyhl run`. Since
+    // pyhl is a short-lived single-sandbox CLI, pinning the initial
+    // count at 1 drops that to ~7ms. Caller can override by setting
+    // the env var explicitly before invoking pyhl.
+    if std::env::var_os("HYPERLIGHT_INITIAL_SURROGATES").is_none() {
+        // Safety: main() runs single-threaded on entry; set_var is safe here.
+        unsafe {
+            std::env::set_var("HYPERLIGHT_INITIAL_SURROGATES", "1");
+        }
+    }
+
     let cli = Cli::parse();
     match cli.cmd {
         Command::Setup(args) => cmd_setup(args),
