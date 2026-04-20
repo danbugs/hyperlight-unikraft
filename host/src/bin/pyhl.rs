@@ -83,6 +83,11 @@ struct RunArgs {
     /// Override the image directory.
     #[arg(long, env = "PYHL_HOME", value_name = "DIR")]
     dest: Option<PathBuf>,
+
+    /// Print evolve/warmup/per-run timing to stderr. Off by default so the
+    /// user's script output is clean.
+    #[arg(short = 'v', long = "verbose")]
+    verbose: bool,
 }
 
 // -- image-home resolution ----------------------------------------------------
@@ -433,10 +438,12 @@ fn cmd_run(args: RunArgs) -> Result<()> {
         // plus headroom for user code.
         .heap_size(2 * 1024 * 1024 * 1024)
         .build()?;
-    eprintln!(
-        "[pyhl] evolve={:.1}ms",
-        t_evolve.elapsed().as_secs_f64() * 1000.0
-    );
+    if args.verbose {
+        eprintln!(
+            "[pyhl] evolve={:.1}ms",
+            t_evolve.elapsed().as_secs_f64() * 1000.0
+        );
+    }
 
     // First call into the guest triggers hl_pydriver's main(): Py_Initialize
     // + preload 17 modules + register the v2 dispatch callback. We eat that
@@ -448,10 +455,12 @@ fn cmd_run(args: RunArgs) -> Result<()> {
     sandbox.restore()?;
     let t_warm = Instant::now();
     let _: () = sandbox.call_named("run", "pass".to_string())?;
-    eprintln!(
-        "[pyhl] warmup={:.1}ms",
-        t_warm.elapsed().as_secs_f64() * 1000.0
-    );
+    if args.verbose {
+        eprintln!(
+            "[pyhl] warmup={:.1}ms",
+            t_warm.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     sandbox.snapshot_now()?;
 
     let total = args.repeat + 1;
@@ -463,9 +472,11 @@ fn cmd_run(args: RunArgs) -> Result<()> {
         let t_call = Instant::now();
         let _: () = sandbox.call_named("run", code.clone())?;
         let call_ms = t_call.elapsed().as_secs_f64() * 1000.0;
-        eprintln!(
-            "[pyhl] run {i}/{total} restore={restore_ms:.1}ms call={call_ms:.1}ms (hermetic)"
-        );
+        if args.verbose {
+            eprintln!(
+                "[pyhl] run {i}/{total} restore={restore_ms:.1}ms call={call_ms:.1}ms (hermetic)"
+            );
+        }
     }
 
     Ok(())

@@ -148,34 +148,10 @@ static void py_run_user_code(const uint8_t *fc, size_t fc_len)
 	if (g_py_fsbase)
 		wrmsr_fsbase(g_py_fsbase);
 
-	{
-		const char *m = "hl_pydriver: v2 callback entered\n";
-		for (const char *p = m; *p; p++)
-			__asm__ __volatile__("outb %0, %1"
-				: : "a"(*p), "Nd"((__u16)103));
-	}
-
 	size_t code_len = 0;
 	const char *code = fc_arg0_string(fc, fc_len, &code_len);
-	{
-		const char *m = code
-			? "hl_pydriver: fc parsed\n"
-			: "hl_pydriver: fc parse returned NULL\n";
-		for (const char *p = m; *p; p++)
-			__asm__ __volatile__("outb %0, %1"
-				: : "a"(*p), "Nd"((__u16)103));
-	}
-	if (!code) {
-		fprintf(stderr, "hl_pydriver: no string arg in FC\n");
+	if (!code)
 		return;
-	}
-
-	{
-		const char *m = "hl_pydriver: about to PyRun_SimpleString\n";
-		for (const char *p = m; *p; p++)
-			__asm__ __volatile__("outb %0, %1"
-				: : "a"(*p), "Nd"((__u16)103));
-	}
 
 	/* PyRun_SimpleString wants a NUL-terminated C string; the FC
 	 * hlstring isn't NUL-terminated in its on-the-wire form. Small
@@ -187,10 +163,8 @@ static void py_run_user_code(const uint8_t *fc, size_t fc_len)
 		PyRun_SimpleString(buf);
 	} else {
 		char *buf = malloc(code_len + 1);
-		if (!buf) {
-			fprintf(stderr, "hl_pydriver: OOM\n");
+		if (!buf)
 			return;
-		}
 		memcpy(buf, code, code_len);
 		buf[code_len] = '\0';
 		PyRun_SimpleString(buf);
@@ -260,39 +234,22 @@ int main(int argc, char **argv, char **envp)
 		}
 	}
 
-	fprintf(stderr, "hl_pydriver: main() entered, envp resolved\n");
-	fflush(stderr);
-
 	if (!py_initialized) {
-		fprintf(stderr, "hl_pydriver: calling Py_Initialize...\n");
-		fflush(stderr);
 		py_initialize_once();
-		fprintf(stderr, "hl_pydriver: Py_Initialize + warmup done\n");
-		fflush(stderr);
 		/* Capture FS_BASE now — this is the TLS pointer Python's
 		 * internals have wired themselves up against. Future v2
 		 * callback entries will restore it before touching any
 		 * Python state. */
 		g_py_fsbase = rdmsr_fsbase();
-		fprintf(stderr, "hl_pydriver: captured py FS_BASE = 0x%lx\n",
-			g_py_fsbase);
-		fflush(stderr);
 		py_initialized = 1;
 		/* Install ourselves as the FC-aware dispatch callback. */
 		*g_v2_callback_slot = py_run_user_code;
-		fprintf(stderr, "hl_pydriver: v2 callback installed\n");
-		fflush(stderr);
 	}
 
 	const uint8_t *fc = *g_fc_bytes_slot;
 	size_t fc_len = *g_fc_len_slot;
-	fprintf(stderr, "hl_pydriver: fc=%p fc_len=%zu\n", fc, fc_len);
-	fflush(stderr);
-	if (fc && fc_len) {
-		fprintf(stderr, "hl_pydriver: handling first call's code...\n");
-		fflush(stderr);
+	if (fc && fc_len)
 		py_run_user_code(fc, fc_len);
-	}
 
 	fflush(stdout);
 	fflush(stderr);
