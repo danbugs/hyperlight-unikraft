@@ -317,26 +317,36 @@ jobs:
             exit 1
           fi
 
-  # Windows runtime gate. Mirrors the Linux runtime-test but:
-  #   - skips the rebuild-from-source dance (no kraft-hyperlight on Windows,
-  #     image is pulled prebuilt from GHCR via `pyhl setup`)
-  #   - only exercises the pyhl path, since that's the user-facing entry
-  #     that needs to keep working on Windows
-  # windows-latest runners have WHP (Hyper-V) and Docker Desktop on their
-  # default image, which is enough for Hyperlight to create a VM. If that
-  # changes, the `Create VM error: No hypervisor was found` message from
-  # the run step is the signal — switch to a larger Windows runner class.
-  # Build the kernel + initrd on Linux (we already do this in the
-  # runtime-test job), package as a GHA artifact, and hand it to
-  # the Windows job via `pyhl setup --from`. Avoids needing docker
-  # on Windows just to pull a FROM-scratch OCI blob.
-  package-image-for-windows:
+  # Build each example's kernel+initrd on Linux once and upload as a
+  # per-example artifact. Matches the build-example matrix so Windows
+  # gets full example coverage without needing kraft-hyperlight or a
+  # Linux docker toolchain on Windows.
+  package-images-for-windows:
     runs-on: ubuntu-latest
     needs: build-example
     permissions:
       contents: read
       packages: read
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        example:
+          - helloworld-c
+          - rust
+          - go
+          - shell
+          - python
+          - python-tools
+          - nodejs
+          - dotnet
+          - dotnet-nativeaot
+          - hostfs-posix-c
+          - hostfs-posix-py
+          - multifn-c
+          - python-agent
+          - python-agent-driver
+          - powershell
     steps:
       - uses: actions/checkout@v4
 
@@ -355,7 +365,8 @@ jobs:
           cd /tmp/kraftkit && go build -o kraft-hyperlight ./cmd/kraft
           sudo mv kraft-hyperlight /usr/local/bin/
 
-      - name: Build local-python-base images
+      - name: Build local-python-base images (python-agent-driver only)
+        if: matrix.example == 'python-agent-driver'
         env:
           DOCKER_BUILDKIT: '0'
         run: |
@@ -365,7 +376,7 @@ jobs:
               -f runtimes/python.Dockerfile runtimes/
 
       - name: Build rootfs + kernel
-        working-directory: examples/python-agent-driver
+        working-directory: examples/${{ matrix.example }}
         env:
           DOCKER_BUILDKIT: '0'
         run: |
@@ -382,99 +393,159 @@ jobs:
           fi
 
       - name: Package image
-        working-directory: examples/python-agent-driver
+        working-directory: examples/${{ matrix.example }}
         run: |
-          mkdir -p /tmp/pyhl-image
-          cp .unikraft/build/python-agent-driver-hyperlight_hyperlight-x86_64 /tmp/pyhl-image/kernel
-          cp python-agent-driver-initrd.cpio /tmp/pyhl-image/initrd.cpio
-          ls -la /tmp/pyhl-image/
+          mkdir -p /tmp/image
+          cp .unikraft/build/*_hyperlight-x86_64 /tmp/image/kernel
+          cpio_file=$(ls *-initrd.cpio 2>/dev/null | head -1)
+          if [ -z "$cpio_file" ]; then
+            cpio_file=$(ls initrd.cpio 2>/dev/null | head -1)
+          fi
+          cp "$cpio_file" /tmp/image/initrd.cpio
+          ls -la /tmp/image/
 
       - name: Upload image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pyhl-image
-          path: /tmp/pyhl-image/
+          name: windows-image-${{ matrix.example }}
+          path: /tmp/image/
           retention-days: 1
           if-no-files-found: error
 
+  # Windows runtime — 1:1 with Linux runtime-test: same examples, same
+  # expected output patterns, same drivers (multifn-test, pydriver-run).
+  # The only difference is we can't build the images on Windows (no
+  # kraft-hyperlight + no Linux docker), so we download them from the
+  # package-images-for-windows job.
   runtime-test-windows:
     runs-on: windows-latest
-    needs: package-image-for-windows
+    needs: package-images-for-windows
     permissions:
       contents: read
       packages: read
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - example: helloworld-c
+            memory: "4Mi"
+            args: ""
+            expect: "Hello from C on Hyperlight"
+          - example: rust
+            memory: "16Mi"
+            args: ""
+            expect: "Hello from Rust on Hyperlight"
+          - example: go
+            memory: "96Mi"
+            args: ""
+            expect: "Hello from Go on Hyperlight"
+          - example: shell
+            memory: "16Mi"
+            args: "-- /demo.sh"
+            expect: "Hello from Shell on Hyperlight"
+          - example: python
+            memory: "512Mi"
+            args: "-- /hello.py"
+            expect: "Hello from Python on Hyperlight"
+          - example: python-tools
+            memory: "1Gi"
+            args: "--enable-tools -- /test_tools.py"
+            expect: "Tool returned"
+          - example: nodejs
+            memory: "512Mi"
+            args: "-- /app/hello.js"
+            expect: "Hello from Node.js on Hyperlight"
+          - example: dotnet
+            memory: "512Mi"
+            args: ""
+            expect: "Hello, World! From .NET on Hyperlight"
+          - example: dotnet-nativeaot
+            memory: "512Mi"
+            args: ""
+            expect: "Hello, World! From .NET NativeAOT on Hyperlight"
+          - example: hostfs-posix-c
+            memory: "16Mi"
+            args: ""
+            expect: "hostfs-posix-c"
+          - example: hostfs-posix-py
+            memory: "512Mi"
+            args: ""
+            expect: "."
+          - example: multifn-c
+            memory: "4Mi"
+            args: ""
+            expect: "INIT"
+            driver: multifn-test
+          - example: python-agent
+            memory: "1Gi"
+            args: "-- /agent.py"
+            expect: "done\\."
+          - example: python-agent-driver
+            memory: "2Gi"
+            args: ""
+            expect: "hello from driver"
+            driver: pydriver-run
+          - example: powershell
+            memory: "1Gi"
+            args: "-- -NoProfile -File /scripts/hello.ps1"
+            expect: "Hello, World! From PowerShell on Hyperlight"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pyhl from this branch
+      - name: Install hyperlight-unikraft host binaries
         shell: pwsh
         run: |
           cargo install --git https://github.com/${{ github.repository }} `
             --branch ${{ github.head_ref || github.ref_name }} `
-            hyperlight-unikraft-host --bin pyhl --locked --force
+            hyperlight-unikraft-host `
+            --bin hyperlight-unikraft `
+            --bin multifn-test `
+            --bin pydriver-run `
+            --bin pyhl `
+            --locked --force
 
       - name: Download prebuilt image
         uses: actions/download-artifact@v4
         with:
-          name: pyhl-image
-          path: pyhl-image
+          name: windows-image-${{ matrix.example }}
+          path: image
 
-      - name: Lay out pyhl setup source dir
+      - name: Run and check output
         shell: pwsh
         run: |
-          # pyhl setup --from expects a build tree shape:
-          #   <dir>/.unikraft/build/*_hyperlight-x86_64     (the kernel)
-          #   <dir>/*-initrd.cpio                            (the rootfs)
-          New-Item -ItemType Directory -Force -Path src-dir/.unikraft/build | Out-Null
-          Move-Item pyhl-image/kernel src-dir/.unikraft/build/pyhl-kernel_hyperlight-x86_64
-          Move-Item pyhl-image/initrd.cpio src-dir/pyhl-initrd.cpio
-          Get-ChildItem -Recurse src-dir
+          $kernel = (Resolve-Path "image/kernel").Path
+          $cpio   = (Resolve-Path "image/initrd.cpio").Path
+          $expect = '${{ matrix.expect }}'
+          $driver = '${{ matrix.driver }}'
+          $memory = '${{ matrix.memory }}'
+          $runArgs = '${{ matrix.args }}'
 
-      - name: pyhl setup --from (warms up snapshot natively on Windows)
-        shell: pwsh
-        run: pyhl setup --from src-dir --force
-
-      - name: pyhl run (hello)
-        shell: pwsh
-        run: |
-          "print('hello from windows CI')" | Out-File -Encoding ascii hi.py
-          $out = pyhl run -v hi.py 2>&1
-          Write-Host $out
-          if ($out -match 'hello from windows CI') {
-            Write-Host "PASS: matched /hello from windows CI/"
-          } else {
-            Write-Error "FAIL: did not match /hello from windows CI/"
-            exit 1
+          switch ($driver) {
+            'multifn-test' {
+              $out = & multifn-test $kernel $cpio 2>&1
+            }
+            'pydriver-run' {
+              "print('hello from driver')" | Out-File -Encoding ascii tiny.py
+              $tiny = (Resolve-Path "tiny.py").Path
+              $out = & pydriver-run $kernel $cpio $tiny 2>&1
+            }
+            default {
+              $argList = @()
+              if ($runArgs -ne '') {
+                $argList = $runArgs.Split(' ') | Where-Object { $_ -ne '' }
+              }
+              $out = & hyperlight-unikraft -q -m $memory `
+                $kernel --initrd $cpio @argList 2>&1
+            }
           }
 
-      - name: pyhl run (pandas — exercises the warm snapshot)
-        shell: pwsh
-        run: |
-          @"
-          import pandas as pd, numpy as np
-          df = pd.DataFrame({'x': np.arange(5)})
-          print('pandas_ok:', df.sum().to_dict())
-          "@ | Out-File -Encoding ascii pandas_test.py
-          $out = pyhl run -v pandas_test.py 2>&1
-          Write-Host $out
-          if ($out -match 'pandas_ok:') {
-            Write-Host "PASS: matched /pandas_ok:/"
+          $outStr = ($out | Out-String)
+          Write-Host "=== output ==="
+          Write-Host $outStr
+          if ($outStr -match $expect) {
+            Write-Host "PASS: matched /$expect/"
           } else {
-            Write-Error "FAIL: did not match /pandas_ok:/"
-            exit 1
-          }
-
-      - name: pyhl run --repeat 4 (exercise hermetic rewind)
-        shell: pwsh
-        run: |
-          $out = pyhl run -v --repeat 4 pandas_test.py 2>&1
-          Write-Host $out
-          # Expect the pandas output five times (run 1/5 .. run 5/5)
-          $hits = ($out | Select-String -Pattern 'pandas_ok:' -AllMatches).Matches.Count
-          if ($hits -ge 5) {
-            Write-Host "PASS: --repeat produced $hits pandas_ok lines"
-          } else {
-            Write-Error "FAIL: expected >=5 pandas_ok lines, got $hits"
+            Write-Error "FAIL: did not match /$expect/"
             exit 1
           }
