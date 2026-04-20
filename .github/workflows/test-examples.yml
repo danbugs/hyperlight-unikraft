@@ -113,3 +113,107 @@ jobs:
             exit 1
           fi
           echo "PASS: kernel=$(stat -c '%s' $kernel) bytes, cpio=$(stat -c '%s' $cpio) bytes"
+
+  # Optional: runtime smoke test when the runner actually exposes /dev/kvm.
+  # GitHub Actions' standard ubuntu-latest runners have been inconsistently
+  # shipping nested virtualization as of 2026; the udev rule below is a
+  # no-op when the device node doesn't exist. If KVM turns out to be
+  # present, we run a tiny subset of examples end-to-end to catch runtime
+  # regressions that build-only jobs can't (e.g. the powershell mmap
+  # crash). If not, the job exits 0 with a warning and doesn't gate the
+  # workflow.
+  runtime-smoke:
+    runs-on: ubuntu-latest
+    needs: build-example
+    permissions:
+      contents: read
+      packages: read
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        example:
+          - helloworld-c       # minimal ELF, confirms dispatch works
+          - python-agent       # real workload — catches mmap/paging regressions
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM permissions (no-op if device absent)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Check KVM availability
+        id: kvm_check
+        run: |
+          if [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+            ls -la /dev/kvm
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "::warning::/dev/kvm is not available on this runner; runtime smoke test skipped"
+          fi
+
+      - name: Install Go (for kraft-hyperlight)
+        if: steps.kvm_check.outputs.available == 'true'
+        run: |
+          curl -sL https://go.dev/dl/go1.25.1.linux-amd64.tar.gz | sudo tar -C /usr/local -xz
+          echo "/usr/local/go/bin" >> $GITHUB_PATH
+
+      - name: Install just
+        if: steps.kvm_check.outputs.available == 'true'
+        uses: extractions/setup-just@v2
+
+      - name: Build kraft-hyperlight
+        if: steps.kvm_check.outputs.available == 'true'
+        run: |
+          git clone --branch hyperlight-platform --depth 1 \
+              https://github.com/danbugs/kraftkit.git /tmp/kraftkit
+          cd /tmp/kraftkit && go build -o kraft-hyperlight ./cmd/kraft
+          sudo mv kraft-hyperlight /usr/local/bin/
+
+      - name: Build host CLI
+        if: steps.kvm_check.outputs.available == 'true'
+        run: |
+          cd host && cargo build --release --bin hyperlight-unikraft
+          sudo cp target/release/hyperlight-unikraft /usr/local/bin/
+
+      - name: Build rootfs + kernel
+        if: steps.kvm_check.outputs.available == 'true'
+        working-directory: examples/${{ matrix.example }}
+        env:
+          DOCKER_BUILDKIT: '0'
+        run: |
+          just rootfs
+          kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64
+
+      - name: Run smoke
+        if: steps.kvm_check.outputs.available == 'true'
+        working-directory: examples/${{ matrix.example }}
+        run: |
+          kernel=$(ls .unikraft/build/*_hyperlight-x86_64 | head -1)
+          cpio=$(ls *-initrd.cpio initrd.cpio 2>/dev/null | head -1)
+          case "${{ matrix.example }}" in
+            helloworld-c)
+              expect="Hello from C on Hyperlight"
+              args=""
+              mem="4Mi"
+              ;;
+            python-agent)
+              expect="done\."
+              args="-- /agent.py"
+              mem="1Gi"
+              ;;
+          esac
+          output=$(timeout 60 hyperlight-unikraft -q -m "$mem" \
+              "$kernel" --initrd "$cpio" $args 2>&1 | tr -d '\0' || true)
+          echo "=== output ==="
+          echo "$output" | head -40
+          if echo "$output" | grep -qE "$expect"; then
+            echo "PASS: matched /$expect/"
+          else
+            echo "FAIL: did not match /$expect/"
+            exit 1
+          fi
