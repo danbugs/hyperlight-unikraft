@@ -316,3 +316,78 @@ jobs:
             echo "FAIL: did not match /$expect/"
             exit 1
           fi
+
+  # Windows runtime gate. Mirrors the Linux runtime-test but:
+  #   - skips the rebuild-from-source dance (no kraft-hyperlight on Windows,
+  #     image is pulled prebuilt from GHCR via `pyhl setup`)
+  #   - only exercises the pyhl path, since that's the user-facing entry
+  #     that needs to keep working on Windows
+  # windows-latest runners have WHP (Hyper-V) and Docker Desktop on their
+  # default image, which is enough for Hyperlight to create a VM. If that
+  # changes, the `Create VM error: No hypervisor was found` message from
+  # the run step is the signal — switch to a larger Windows runner class.
+  runtime-test-windows:
+    runs-on: windows-latest
+    needs: build-example
+    permissions:
+      contents: read
+      packages: read
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pyhl from this branch
+        shell: pwsh
+        run: |
+          cargo install --git https://github.com/${{ github.repository }} `
+            --branch ${{ github.head_ref || github.ref_name }} `
+            hyperlight-unikraft-host --bin pyhl --locked --force
+
+      - name: pyhl setup (pulls image from GHCR, warms up snapshot)
+        shell: pwsh
+        run: |
+          # windows-latest has Docker Desktop preinstalled but may not be
+          # running yet; start the engine and wait for readiness.
+          Start-Service docker 2>$null
+          $tries = 30
+          while ($tries -gt 0) {
+            docker info 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 1
+            $tries--
+          }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "docker engine did not become ready in 30s"
+            exit 1
+          }
+          pyhl setup --force
+
+      - name: pyhl run (hello)
+        shell: pwsh
+        run: |
+          "print('hello from windows CI')" | Out-File -Encoding ascii hi.py
+          $out = pyhl run -v hi.py 2>&1
+          Write-Host $out
+          if ($out -match 'hello from windows CI') {
+            Write-Host "PASS: matched /hello from windows CI/"
+          } else {
+            Write-Error "FAIL: did not match /hello from windows CI/"
+            exit 1
+          }
+
+      - name: pyhl run (pandas — exercises the warm snapshot)
+        shell: pwsh
+        run: |
+          @"
+          import pandas as pd, numpy as np
+          df = pd.DataFrame({'x': np.arange(5)})
+          print('pandas_ok:', df.sum().to_dict())
+          "@ | Out-File -Encoding ascii pandas_test.py
+          $out = pyhl run -v pandas_test.py 2>&1
+          Write-Host $out
+          if ($out -match 'pandas_ok:') {
+            Write-Host "PASS: matched /pandas_ok:/"
+          } else {
+            Write-Error "FAIL: did not match /pandas_ok:/"
+            exit 1
+          }
