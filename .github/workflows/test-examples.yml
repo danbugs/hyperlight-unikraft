@@ -95,7 +95,21 @@ jobs:
       - name: Build kernel
         working-directory: examples/${{ matrix.example }}
         run: |
-          kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64
+          kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64 || true
+          # Fallback: kraft's source-resolution path is flaky (it sometimes
+          # probes + finds the repo but skips the pull and leaves
+          # .unikraft/unikraft empty — see memory/feedback_kraft_clean_rebuild).
+          # Manually clone the components and rebuild with --no-fetch/--no-update.
+          if [ ! -d ".unikraft/unikraft" ] || [ -z "$(ls -A .unikraft/unikraft 2>/dev/null)" ]; then
+            echo "::warning::kraft didn't clone unikraft sources; cloning manually"
+            UK_BRANCH=$(grep -E '^  version:' kraft.yaml | head -1 | awk '{print $2}')
+            mkdir -p .unikraft/apps .unikraft/libs
+            rm -rf .unikraft/unikraft .unikraft/apps/elfloader .unikraft/libs/libelf .unikraft/build
+            git clone --branch $UK_BRANCH --depth 1 https://github.com/danbugs/unikraft.git .unikraft/unikraft
+            git clone --branch $UK_BRANCH --depth 1 https://github.com/danbugs/app-elfloader.git .unikraft/apps/elfloader
+            git clone --branch staging --depth 1 https://github.com/unikraft/lib-libelf.git .unikraft/libs/libelf
+            kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64
+          fi
 
       - name: Verify artifacts produced
         working-directory: examples/${{ matrix.example }}
@@ -267,7 +281,17 @@ jobs:
           DOCKER_BUILDKIT: '0'
         run: |
           just rootfs
-          kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64
+          kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64 || true
+          if [ ! -d ".unikraft/unikraft" ] || [ -z "$(ls -A .unikraft/unikraft 2>/dev/null)" ]; then
+            echo "::warning::kraft didn't clone unikraft sources; cloning manually"
+            UK_BRANCH=$(grep -E '^  version:' kraft.yaml | head -1 | awk '{print $2}')
+            mkdir -p .unikraft/apps .unikraft/libs
+            rm -rf .unikraft/unikraft .unikraft/apps/elfloader .unikraft/libs/libelf .unikraft/build
+            git clone --branch $UK_BRANCH --depth 1 https://github.com/danbugs/unikraft.git .unikraft/unikraft
+            git clone --branch $UK_BRANCH --depth 1 https://github.com/danbugs/app-elfloader.git .unikraft/apps/elfloader
+            git clone --branch staging --depth 1 https://github.com/unikraft/lib-libelf.git .unikraft/libs/libelf
+            kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64
+          fi
 
       - name: Prepare pydriver-run script (python-agent-driver only)
         if: steps.kvm_check.outputs.available == 'true' && matrix.driver == 'pydriver-run'
