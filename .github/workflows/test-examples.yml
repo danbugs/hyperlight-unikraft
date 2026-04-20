@@ -321,13 +321,7 @@ jobs:
               cmd=(timeout 120 /home/runner/work/hyperlight-unikraft/hyperlight-unikraft/host/target/release/pydriver-run "$kernel" "$cpio" /tmp/tiny.py)
               ;;
             *)
-              if [ "${{ matrix.needs_mount }}" = "true" ]; then
-                export HL_DISPATCH_DEBUG=1
-                echo "CMD: hyperlight-unikraft -m ${{ matrix.memory }} $kernel --initrd $cpio $mount_args ${{ matrix.args }}"
-                cmd=(timeout 120 hyperlight-unikraft -m "${{ matrix.memory }}" "$kernel" --initrd "$cpio" $mount_args ${{ matrix.args }})
-              else
-                cmd=(timeout 120 hyperlight-unikraft -q -m "${{ matrix.memory }}" "$kernel" --initrd "$cpio" $mount_args ${{ matrix.args }})
-              fi
+              cmd=(timeout 120 hyperlight-unikraft -q -m "${{ matrix.memory }}" "$kernel" --initrd "$cpio" $mount_args ${{ matrix.args }})
               ;;
           esac
           set +e
@@ -587,21 +581,9 @@ jobs:
               if ($runArgs -ne '') {
                 $argList = $runArgs.Split(' ') | Where-Object { $_ -ne '' }
               }
-              # For mount cells: keep host-side verbose and turn on
-              # HL_DISPATCH_DEBUG so we can see __dispatch calls in logs
-              # while tracking down danbugs/hyperlight-unikraft#1.
-              if ($needsMount -eq 'true') {
-                $env:HL_DISPATCH_DEBUG = '1'
-                Write-Host "CMD: hyperlight-unikraft -m $memory $kernel --initrd $cpio $mountArgs $argList"
-                $out = & hyperlight-unikraft -m $memory `
-                  $kernel --initrd $cpio @mountArgs @argList 2>&1
-                $rc = $LASTEXITCODE
-                $env:HL_DISPATCH_DEBUG = $null
-              } else {
-                $out = & hyperlight-unikraft -q -m $memory `
-                  $kernel --initrd $cpio @mountArgs @argList 2>&1
-                $rc = $LASTEXITCODE
-              }
+              $out = & hyperlight-unikraft -q -m $memory `
+                $kernel --initrd $cpio @mountArgs @argList 2>&1
+              $rc = $LASTEXITCODE
             }
           }
 
