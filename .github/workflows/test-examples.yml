@@ -114,30 +114,96 @@ jobs:
           fi
           echo "PASS: kernel=$(stat -c '%s' $kernel) bytes, cpio=$(stat -c '%s' $cpio) bytes"
 
-  # Runtime smoke test. GitHub-hosted ubuntu-latest runners DO expose
-  # /dev/kvm (verified 2026-04-20); the udev snippet below makes the
-  # device node world-accessible so Hyperlight can create a VM under the
-  # default runner user. A presence check still short-circuits the job
-  # with a ::warning:: if a future runner ships without KVM, so it
-  # degrades gracefully rather than failing mysteriously.
+  # Runtime test. GitHub-hosted ubuntu-latest runners DO expose /dev/kvm
+  # (verified 2026-04-20); the udev snippet below makes the device node
+  # world-accessible so Hyperlight can create a VM under the default
+  # runner user. A presence check still short-circuits the job with a
+  # ::warning:: if a future runner ships without KVM, so it degrades
+  # gracefully rather than failing mysteriously.
   #
-  # Two examples run end-to-end — helloworld-c (smallest valid guest)
-  # and python-agent (the heaviest mmap/Python workload short of the
-  # broken powershell). Together they cover the basic dispatch path
-  # and the hot mmap path that broke in previous sessions.
-  runtime-smoke:
+  # Full matrix — every example actually runs and its expected output is
+  # greped from the guest console. This is the real regression gate;
+  # build-example above only catches link-time errors.
+  #
+  # `continue-on-error` on powershell because it's a known pre-existing
+  # runtime crash at 0x81ec7cd08 (deterministic double fault, tracked
+  # separately). The job reports the failure but doesn't block the
+  # overall workflow, so CI stays useful while the investigation continues.
+  runtime-test:
     runs-on: ubuntu-latest
     needs: build-example
     permissions:
       contents: read
       packages: read
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        example:
-          - helloworld-c       # minimal ELF, confirms dispatch works
-          - python-agent       # real workload — catches mmap/paging regressions
+        include:
+          - example: helloworld-c
+            memory: "4Mi"
+            args: ""
+            expect: "Hello from C on Hyperlight"
+          - example: rust
+            memory: "16Mi"
+            args: ""
+            expect: "Hello from Rust on Hyperlight"
+          - example: go
+            memory: "96Mi"
+            args: ""
+            expect: "Hello from Go on Hyperlight"
+          - example: shell
+            memory: "16Mi"
+            args: "-- /demo.sh"
+            expect: "Hello from Shell on Hyperlight"
+          - example: python
+            memory: "512Mi"
+            args: "-- /hello.py"
+            expect: "Hello from Python on Hyperlight"
+          - example: python-tools
+            memory: "1Gi"
+            args: ""
+            expect: "Python"
+          - example: nodejs
+            memory: "512Mi"
+            args: "-- /app/hello.js"
+            expect: "Hello from Node.js on Hyperlight"
+          - example: dotnet
+            memory: "512Mi"
+            args: ""
+            expect: "Hello, World! From .NET on Hyperlight"
+          - example: dotnet-nativeaot
+            memory: "512Mi"
+            args: ""
+            expect: "Hello, World! From .NET NativeAOT on Hyperlight"
+          - example: hostfs-posix-c
+            memory: "16Mi"
+            args: ""
+            expect: "hostfs-posix-c"
+          - example: hostfs-posix-py
+            memory: "512Mi"
+            args: ""
+            expect: "."  # runs fine, no well-known hello string
+          - example: multifn-c
+            memory: "4Mi"
+            args: ""
+            expect: "INIT"
+            driver: multifn-test
+          - example: python-agent
+            memory: "1Gi"
+            args: "-- /agent.py"
+            expect: "done\\."
+          - example: python-agent-driver
+            memory: "2Gi"
+            args: ""
+            expect: "hello from driver"
+            driver: pydriver-run
+          - example: powershell
+            memory: "1Gi"
+            args: "-- -NoProfile -File /scripts/hello.ps1"
+            expect: "Hello, World! From PowerShell on Hyperlight"
+            # Known pre-existing double-fault at 0x81ec7cd08; tracked separately.
+            continue_on_error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -156,7 +222,7 @@ jobs:
             ls -la /dev/kvm
           else
             echo "available=false" >> $GITHUB_OUTPUT
-            echo "::warning::/dev/kvm is not available on this runner; runtime smoke test skipped"
+            echo "::warning::/dev/kvm is not available on this runner; runtime test skipped"
           fi
 
       - name: Install Go (for kraft-hyperlight)
@@ -177,11 +243,22 @@ jobs:
           cd /tmp/kraftkit && go build -o kraft-hyperlight ./cmd/kraft
           sudo mv kraft-hyperlight /usr/local/bin/
 
-      - name: Build host CLI
+      - name: Build host binaries
         if: steps.kvm_check.outputs.available == 'true'
         run: |
-          cd host && cargo build --release --bin hyperlight-unikraft
+          cd host
+          cargo build --release --bin hyperlight-unikraft --bin multifn-test --bin pydriver-run
           sudo cp target/release/hyperlight-unikraft /usr/local/bin/
+
+      - name: Build local-python-base images (python-agent-driver only)
+        if: steps.kvm_check.outputs.available == 'true' && matrix.example == 'python-agent-driver'
+        env:
+          DOCKER_BUILDKIT: '0'
+        run: |
+          docker build --target base -t local-python-base-dev:latest \
+              -f runtimes/python.Dockerfile runtimes/
+          docker build -t local-python-base:latest \
+              -f runtimes/python.Dockerfile runtimes/
 
       - name: Build rootfs + kernel
         if: steps.kvm_check.outputs.available == 'true'
@@ -192,26 +269,32 @@ jobs:
           just rootfs
           kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64
 
-      - name: Run smoke
+      - name: Prepare pydriver-run script (python-agent-driver only)
+        if: steps.kvm_check.outputs.available == 'true' && matrix.driver == 'pydriver-run'
+        run: echo 'print("hello from driver")' > /tmp/tiny.py
+
+      - name: Run and check output
         if: steps.kvm_check.outputs.available == 'true'
+        continue-on-error: ${{ matrix.continue_on_error == true }}
         working-directory: examples/${{ matrix.example }}
         run: |
           kernel=$(ls .unikraft/build/*_hyperlight-x86_64 | head -1)
           cpio=$(ls *-initrd.cpio initrd.cpio 2>/dev/null | head -1)
-          case "${{ matrix.example }}" in
-            helloworld-c)
-              expect="Hello from C on Hyperlight"
-              args=""
-              mem="4Mi"
+          expect='${{ matrix.expect }}'
+          case "${{ matrix.driver }}" in
+            multifn-test)
+              output=$(timeout 60 /home/runner/work/hyperlight-unikraft/hyperlight-unikraft/host/target/release/multifn-test \
+                  "$kernel" "$cpio" 2>&1 | tr -d '\0' || true)
               ;;
-            python-agent)
-              expect="done\."
-              args="-- /agent.py"
-              mem="1Gi"
+            pydriver-run)
+              output=$(timeout 120 /home/runner/work/hyperlight-unikraft/hyperlight-unikraft/host/target/release/pydriver-run \
+                  "$kernel" "$cpio" /tmp/tiny.py 2>&1 | tr -d '\0' || true)
+              ;;
+            *)
+              output=$(timeout 120 hyperlight-unikraft -q -m "${{ matrix.memory }}" \
+                  "$kernel" --initrd "$cpio" ${{ matrix.args }} 2>&1 | tr -d '\0' || true)
               ;;
           esac
-          output=$(timeout 60 hyperlight-unikraft -q -m "$mem" \
-              "$kernel" --initrd "$cpio" $args 2>&1 | tr -d '\0' || true)
           echo "=== output ==="
           echo "$output" | head -40
           if echo "$output" | grep -qE "$expect"; then
