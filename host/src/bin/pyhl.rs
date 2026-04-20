@@ -173,6 +173,19 @@ struct RunArgs {
     /// user's script output is clean.
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
+
+    /// Don't reseed random / numpy.random at the start of each call.
+    ///
+    /// By default pyhl prepends `random.seed()` and `np.random.seed()`
+    /// (with fresh host entropy) to every script so `random.random()`
+    /// and `np.random.randint()` yield different values per invocation —
+    /// matching `python3` behavior.
+    ///
+    /// Pass `--deterministic` to skip the reseed. Every run then sees
+    /// the exact same RNG state captured in the snapshot (useful when
+    /// you want bit-for-bit reproducibility across calls).
+    #[arg(long = "deterministic")]
+    deterministic: bool,
 }
 
 // -- image-home resolution ----------------------------------------------------
@@ -557,8 +570,21 @@ fn cmd_run(args: RunArgs) -> Result<()> {
             t_restore.elapsed().as_secs_f64() * 1000.0
         };
 
+        // Reseed Python's RNGs with fresh host entropy unless the user
+        // asked for bit-for-bit reproducibility across calls. Every run
+        // picks up a new seed so np.random.randint / random.random
+        // match python3's "different result every invocation" behavior.
+        let payload = if args.deterministic {
+            code.clone()
+        } else {
+            let mut full = String::with_capacity(code.len() + 256);
+            full.push_str(&reseed_prelude());
+            full.push_str(&code);
+            full
+        };
+
         let t_call = Instant::now();
-        let _: () = sandbox.call_named("run", code.clone())?;
+        let _: () = sandbox.call_named("run", payload)?;
         let call_ms = t_call.elapsed().as_secs_f64() * 1000.0;
         if args.verbose {
             eprintln!(
@@ -568,6 +594,58 @@ fn cmd_run(args: RunArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Python prelude that re-seeds `random` and (optionally) `numpy.random`
+/// with fresh host entropy. Matches what each fresh `python3` invocation
+/// would do automatically: `random.seed()` / `np.random.seed()` without
+/// an argument pulls from `os.urandom()` at import time.
+///
+/// We seed from the host side because the guest's entropy source is
+/// snapshotted too — calling `random.seed()` inside the guest without
+/// arguments would re-read the same `os.urandom` state every time.
+///
+/// The helper names start with `_pyhl_` to avoid colliding with anything
+/// the user might define; `del` cleans up so their namespace is tidy.
+fn reseed_prelude() -> String {
+    let seed = fresh_seed();
+    format!(
+        "import random as _pyhl_random\n\
+         _pyhl_random.seed({seed})\n\
+         try:\n\
+         \x20   import numpy.random as _pyhl_nprnd\n\
+         \x20   _pyhl_nprnd.seed({seed_lo})\n\
+         \x20   del _pyhl_nprnd\n\
+         except ImportError:\n\
+         \x20   pass\n\
+         del _pyhl_random\n",
+        seed = seed,
+        // numpy.random.seed accepts 0..=2**32-1, so take the low 32 bits.
+        seed_lo = (seed as u32),
+    )
+}
+
+/// Produce a fresh 128-bit seed per call. Mixes high-resolution wall
+/// time, process/thread ids, and a monotonically-increasing counter so
+/// repeated calls within the same process also differ.
+fn fresh_seed() -> u128 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id() as u128;
+    let ctr = COUNTER.fetch_add(1, Ordering::Relaxed) as u128;
+    // Mix via SplitMix-ish folding. Not cryptographic — we only need
+    // different-enough bits per call, and Python/numpy's own RNGs do
+    // the heavy lifting once seeded.
+    let mut x = nanos.wrapping_mul(0x9E37_79B9_7F4A_7C15_9E37_79B9_7F4A_7C15);
+    x ^= pid.wrapping_mul(0xBF58_476D_1CE4_E5B9_BF58_476D_1CE4_E5B9);
+    x ^= ctr.wrapping_mul(0x94D0_49BB_1331_11EB_94D0_49BB_1331_11EB);
+    x
 }
 
 // -- main ---------------------------------------------------------------------
