@@ -195,7 +195,7 @@ jobs:
           - example: multifn-c
             memory: "4Mi"
             args: ""
-            expect: "INIT"
+            expect: "RUN: world"
             driver: multifn-test
           - example: python-agent
             memory: "1Gi"
@@ -293,6 +293,10 @@ jobs:
         if: steps.kvm_check.outputs.available == 'true'
         working-directory: examples/${{ matrix.example }}
         run: |
+          # Strict mode: expected output must appear AND the driver
+          # process must exit cleanly. A guest that prints the right
+          # banner and then crashes no longer counts as passing.
+          set -o pipefail
           kernel=$(ls .unikraft/build/*_hyperlight-x86_64 | head -1)
           cpio=$(ls *-initrd.cpio initrd.cpio 2>/dev/null | head -1)
           expect='${{ matrix.expect }}'
@@ -304,26 +308,33 @@ jobs:
           fi
           case "${{ matrix.driver }}" in
             multifn-test)
-              output=$(timeout 60 /home/runner/work/hyperlight-unikraft/hyperlight-unikraft/host/target/release/multifn-test \
-                  "$kernel" "$cpio" 2>&1 | tr -d '\0' || true)
+              cmd=(timeout 60 /home/runner/work/hyperlight-unikraft/hyperlight-unikraft/host/target/release/multifn-test "$kernel" "$cpio")
               ;;
             pydriver-run)
-              output=$(timeout 120 /home/runner/work/hyperlight-unikraft/hyperlight-unikraft/host/target/release/pydriver-run \
-                  "$kernel" "$cpio" /tmp/tiny.py 2>&1 | tr -d '\0' || true)
+              cmd=(timeout 120 /home/runner/work/hyperlight-unikraft/hyperlight-unikraft/host/target/release/pydriver-run "$kernel" "$cpio" /tmp/tiny.py)
               ;;
             *)
-              output=$(timeout 120 hyperlight-unikraft -q -m "${{ matrix.memory }}" \
-                  "$kernel" --initrd "$cpio" $mount_args ${{ matrix.args }} 2>&1 | tr -d '\0' || true)
+              cmd=(timeout 120 hyperlight-unikraft -q -m "${{ matrix.memory }}" "$kernel" --initrd "$cpio" $mount_args ${{ matrix.args }})
               ;;
           esac
-          echo "=== output ==="
+          set +e
+          output=$("${cmd[@]}" 2>&1)
+          exit_code=$?
+          set -e
+          output=$(printf '%s' "$output" | tr -d '\0')
+          echo "=== output (exit=$exit_code) ==="
           echo "$output" | head -40
-          if echo "$output" | grep -qE "$expect"; then
-            echo "PASS: matched /$expect/"
-          else
+          matched=0
+          echo "$output" | grep -qE "$expect" && matched=1
+          if [ "$matched" -ne 1 ]; then
             echo "FAIL: did not match /$expect/"
             exit 1
           fi
+          if [ "$exit_code" -ne 0 ]; then
+            echo "FAIL: driver exited with $exit_code after printing expected output"
+            exit 1
+          fi
+          echo "PASS: matched /$expect/ and exited cleanly"
 
   # Build each example's kernel+initrd on Linux once and upload as a
   # per-example artifact. Matches the Windows runtime matrix so Windows
@@ -480,7 +491,7 @@ jobs:
           - example: multifn-c
             memory: "4Mi"
             args: ""
-            expect: "INIT"
+            expect: "RUN: world"
             driver: multifn-test
           - example: python-agent
             memory: "1Gi"
@@ -537,14 +548,21 @@ jobs:
             $mountArgs = @('--mount', ($mountDir + ':/host'))
           }
 
+          # Strict mode: expected output must appear AND the driver
+          # must exit 0. Matches Linux semantics.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $ErrorActionPreference = 'Continue'
+
           switch ($driver) {
             'multifn-test' {
               $out = & multifn-test $kernel $cpio 2>&1
+              $rc = $LASTEXITCODE
             }
             'pydriver-run' {
               "print('hello from driver')" | Out-File -Encoding ascii tiny.py
               $tiny = (Resolve-Path "tiny.py").Path
               $out = & pydriver-run $kernel $cpio $tiny 2>&1
+              $rc = $LASTEXITCODE
             }
             default {
               $argList = @()
@@ -553,18 +571,23 @@ jobs:
               }
               $out = & hyperlight-unikraft -q -m $memory `
                 $kernel --initrd $cpio @mountArgs @argList 2>&1
+              $rc = $LASTEXITCODE
             }
           }
 
           $outStr = ($out | Out-String)
-          Write-Host "=== output ==="
+          Write-Host "=== output (exit=$rc) ==="
           Write-Host $outStr
-          if ($outStr -match $expect) {
-            Write-Host "PASS: matched /$expect/"
-          } else {
-            Write-Error "FAIL: did not match /$expect/"
+          if (-not ($outStr -match $expect)) {
+            Write-Host "FAIL: did not match /$expect/"
             exit 1
           }
+          if ($rc -ne 0) {
+            Write-Host "FAIL: driver exited with $rc after printing expected output"
+            exit 1
+          }
+          Write-Host "PASS: matched /$expect/ and exited cleanly"
+          exit 0
 
   # pyhl snapshot-to-disk end-to-end — runs the exact same flow on both
   # Linux and Windows:
