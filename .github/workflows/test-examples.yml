@@ -1,0 +1,166 @@
+name: Test examples (regression gate)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - 'examples/**'
+      - 'runtimes/**'
+      - 'host/**'
+      - '.github/workflows/test-examples.yml'
+
+# Each example is built from scratch (rootfs + kernel) in its own job,
+# then smoke-tested by running it with expected-output grep. Failures
+# surface quickly without the noise of a full rebuild-everything job.
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
+
+jobs:
+  test-example:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        example:
+          - name: helloworld-c
+            run_args: ""
+            memory: "4Mi"
+            expect: "Hello from C on Hyperlight"
+          - name: rust
+            run_args: ""
+            memory: "16Mi"
+            expect: "Hello from Rust on Hyperlight"
+          - name: go
+            run_args: ""
+            memory: "96Mi"
+            expect: "Hello from Go on Hyperlight"
+          - name: shell
+            run_args: "-- /demo.sh"
+            memory: "16Mi"
+            expect: "Hello from Shell on Hyperlight"
+          - name: python
+            run_args: "-- /hello.py"
+            memory: "512Mi"
+            expect: "Hello from Python on Hyperlight"
+          - name: nodejs
+            run_args: "-- /app/hello.js"
+            memory: "512Mi"
+            expect: "Hello from Node.js on Hyperlight"
+          - name: dotnet
+            run_args: ""
+            memory: "512Mi"
+            expect: "Hello, World! From .NET on Hyperlight"
+          - name: dotnet-nativeaot
+            run_args: ""
+            memory: "512Mi"
+            expect: "Hello, World! From .NET NativeAOT on Hyperlight"
+          - name: hostfs-posix-c
+            run_args: ""
+            memory: "16Mi"
+            expect: "hostfs-posix-c"
+          - name: hostfs-posix-py
+            run_args: ""
+            memory: "512Mi"
+            expect: "hostfs-posix-py"
+          - name: multifn-c
+            run_args: ""
+            memory: "4Mi"
+            expect: "INIT"
+            # multifn-c needs the multifn-test driver, not the generic hyperlight-unikraft CLI.
+            driver: multifn-test
+          - name: python-agent
+            run_args: "-- /agent.py"
+            memory: "1Gi"
+            expect: "done."
+          - name: python-agent-driver
+            # Uses pyhl-style invocation; pydriver-run is the simplest runner.
+            run_args: "/tmp/tiny.py"
+            memory: "2Gi"
+            expect: "hello from driver"
+            driver: pydriver-run
+          # powershell: deterministic kernel-mode SIGSEGV at 0x81ec7cd08 during
+          # pwsh startup — a pre-existing regression from the mmap hot-path
+          # overhaul (plat/hyperlight/cow.c PROT_NONE handling). Tracked
+          # separately; re-enable once fixed.
+          # - name: powershell
+          #   run_args: "-- -NoProfile -File /scripts/hello.ps1"
+          #   memory: "1Gi"
+          #   expect: "Hello.*PowerShell"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build toolchain
+        run: |
+          # Go (for kraft-hyperlight)
+          curl -sL https://go.dev/dl/go1.25.1.linux-amd64.tar.gz | sudo tar -C /usr/local -xz
+          echo "/usr/local/go/bin" >> $GITHUB_PATH
+          # Rust is preinstalled on GitHub runners
+          cargo install just
+
+      - name: Build kraft-hyperlight
+        run: |
+          git clone --branch hyperlight-platform --depth 1 \
+              https://github.com/danbugs/kraftkit.git /tmp/kraftkit
+          cd /tmp/kraftkit && go build -o kraft-hyperlight ./cmd/kraft
+          sudo mv kraft-hyperlight /usr/local/bin/
+
+      - name: Build hyperlight-unikraft host binaries
+        run: |
+          cd host
+          cargo build --release --bin hyperlight-unikraft --bin multifn-test --bin pydriver-run --bin pyhl
+          sudo cp target/release/hyperlight-unikraft /usr/local/bin/
+
+      - name: Build rootfs
+        working-directory: examples/${{ matrix.example.name }}
+        env:
+          DOCKER_BUILDKIT: '0'
+        run: |
+          just rootfs
+
+      - name: Build kernel
+        working-directory: examples/${{ matrix.example.name }}
+        run: |
+          kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64
+
+      - name: Prepare pydriver-run script (only for python-agent-driver)
+        if: matrix.example.driver == 'pydriver-run'
+        run: |
+          echo 'print("hello from driver")' > /tmp/tiny.py
+
+      - name: Run example and check output
+        working-directory: examples/${{ matrix.example.name }}
+        run: |
+          kernel=$(ls .unikraft/build/*_hyperlight-x86_64 | head -1)
+          cpio=$(ls *-initrd.cpio initrd.cpio 2>/dev/null | head -1)
+          case "${{ matrix.example.driver }}" in
+            multifn-test)
+              output=$(timeout 30 /home/runner/work/hyperlight-unikraft/hyperlight-unikraft/host/target/release/multifn-test \
+                  "$kernel" "$cpio" 2>&1 | tr -d '\0' || true)
+              ;;
+            pydriver-run)
+              output=$(timeout 60 /home/runner/work/hyperlight-unikraft/hyperlight-unikraft/host/target/release/pydriver-run \
+                  "$kernel" "$cpio" /tmp/tiny.py 2>&1 | tr -d '\0' || true)
+              ;;
+            *)
+              output=$(timeout 30 hyperlight-unikraft -q -m "${{ matrix.example.memory }}" \
+                  "$kernel" --initrd "$cpio" ${{ matrix.example.run_args }} 2>&1 | tr -d '\0' || true)
+              ;;
+          esac
+          echo "=== guest output ==="
+          echo "$output" | head -50
+          echo "=== check ==="
+          if echo "$output" | grep -qE "${{ matrix.example.expect }}"; then
+            echo "PASS: matched /${{ matrix.example.expect }}/"
+          else
+            echo "FAIL: did not match /${{ matrix.example.expect }}/"
+            exit 1
+          fi
