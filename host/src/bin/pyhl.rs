@@ -22,7 +22,10 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use hyperlight_unikraft::pyhl::{copy_replace, discover_source_artifacts};
+use hyperlight_unikraft::pyhl::{
+    copy_replace, discover_source_artifacts, extract_from_ghcr, GHCR_INITRD_IMAGE,
+    GHCR_KERNEL_IMAGE,
+};
 use hyperlight_unikraft::{Preopen, Sandbox};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -254,14 +257,6 @@ fn image_installed(home: &Path) -> bool {
 
 // -- `setup` ------------------------------------------------------------------
 
-/// GHCR OCI image references published by .github/workflows/publish-examples.yml.
-/// Both images are FROM-scratch payloads: kernel image has a single /kernel,
-/// initrd image has a single /initrd.cpio.
-const GHCR_KERNEL_IMAGE: &str =
-    "ghcr.io/danbugs/hyperlight-unikraft/python-agent-driver-kernel:latest";
-const GHCR_INITRD_IMAGE: &str =
-    "ghcr.io/danbugs/hyperlight-unikraft/python-agent-driver-initrd:latest";
-
 fn cmd_setup(args: SetupArgs) -> Result<()> {
     let home = resolve_home(args.dest.as_deref(), ResolveMode::ForSetup)?;
 
@@ -383,113 +378,6 @@ fn cmd_setup(args: SetupArgs) -> Result<()> {
         mib(&dst_snapshot)
     );
     Ok(())
-}
-
-/// Pull an OCI image from GHCR and extract a single file out of it. The
-/// workflow-published kernel/initrd images are FROM-scratch with a single
-/// payload file at a known path (/kernel or /initrd.cpio), so this is a
-/// straightforward `pull → create → cp → rm` dance.
-///
-/// Uses whichever of `docker` / `podman` is on PATH. Both speak the same
-/// OCI protocol to ghcr.io and need no auth for public pulls.
-fn extract_from_ghcr(image: &str, src_path_in_image: &str, dst: &Path) -> Result<()> {
-    use std::process::Command;
-
-    let tool = find_on_path(&["docker", "podman"]).ok_or_else(|| {
-        anyhow!(
-            "need `docker` or `podman` on $PATH to pull the pyhl image from GHCR.\n\
-             alternatives: install one of them, or use `pyhl setup --from <local-dir>`"
-        )
-    })?;
-
-    let run = |cmd: &mut Command, label: &str| -> Result<std::process::Output> {
-        let out = cmd
-            .output()
-            .with_context(|| format!("spawn {tool} {label}"))?;
-        if !out.status.success() {
-            bail!(
-                "{tool} {label} failed (exit {:?}): {}",
-                out.status.code(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
-        Ok(out)
-    };
-
-    eprintln!("pyhl:   pull {image}");
-    run(Command::new(tool).args(["pull", image]), "pull")?;
-
-    // Pick a container name unlikely to collide with user containers.
-    let cname = format!("pyhl-extract-{}", std::process::id());
-    let _ = Command::new(tool).args(["rm", "-f", &cname]).output();
-
-    let create_out = run(
-        Command::new(tool).args(["create", "--name", &cname, image, "/bogus-entry"]),
-        "create",
-    )?;
-    let _ = String::from_utf8_lossy(&create_out.stdout);
-
-    let cleanup = scopeguard_cleanup(tool, &cname);
-
-    run(
-        Command::new(tool).args([
-            "cp",
-            &format!("{cname}:{src_path_in_image}"),
-            dst.to_str().expect("dst is utf-8"),
-        ]),
-        "cp",
-    )?;
-
-    drop(cleanup);
-    Ok(())
-}
-
-/// Minimal "run this on drop" helper so the tmp container always gets
-/// removed, even if `cp` fails partway through.
-fn scopeguard_cleanup(tool: &str, cname: &str) -> CleanupContainer {
-    CleanupContainer {
-        tool: tool.to_string(),
-        cname: cname.to_string(),
-    }
-}
-
-struct CleanupContainer {
-    tool: String,
-    cname: String,
-}
-impl Drop for CleanupContainer {
-    fn drop(&mut self) {
-        let _ = std::process::Command::new(&self.tool)
-            .args(["rm", "-f", &self.cname])
-            .output();
-    }
-}
-
-/// Return the first name in `names` that is present as an executable on the
-/// user's PATH. Avoids a `which` crate dep — we only need a boolean check.
-fn find_on_path(names: &[&'static str]) -> Option<&'static str> {
-    let path = std::env::var_os("PATH")?;
-    for name in names {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join(name);
-            if let Ok(md) = candidate.metadata() {
-                if md.is_file() {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        if md.permissions().mode() & 0o111 != 0 {
-                            return Some(name);
-                        }
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        return Some(name);
-                    }
-                }
-            }
-        }
-    }
-    None
 }
 
 fn mib(p: &Path) -> u64 {

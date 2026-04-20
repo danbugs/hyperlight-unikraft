@@ -140,18 +140,13 @@ pub fn install(opts: &InstallOptions<'_>) -> Result<InstallReport> {
             fs::create_dir_all(&scratch)?;
             let k = scratch.join("kernel");
             let i = scratch.join("initrd.cpio");
-            // The `pyhl` binary owns the docker-shelled-out GHCR pull
-            // path; call it via the binary helper. Library callers who
-            // need GHCR can invoke `pyhl setup` as a subprocess or
-            // use `LocalDir` to bring their own files.
-            return Err(anyhow!(
-                "InstallSource::Ghcr is only supported from the pyhl \
-                 binary today; pass InstallSource::LocalDir or Explicit \
-                 from library callers, or invoke `pyhl setup` as a \
-                 subprocess. (placeholder kernel={}, initrd={})",
-                k.display(),
-                i.display()
-            ));
+            extract_from_ghcr(GHCR_KERNEL_IMAGE, "/kernel", &k)?;
+            extract_from_ghcr(GHCR_INITRD_IMAGE, "/initrd.cpio", &i)?;
+            (
+                format!("ghcr: {GHCR_KERNEL_IMAGE} + {GHCR_INITRD_IMAGE}"),
+                k,
+                i,
+            )
         }
     };
 
@@ -338,4 +333,118 @@ pub fn discover_source_artifacts(dir: &Path) -> Result<(PathBuf, PathBuf)> {
         })?;
 
     Ok((kernel, initrd))
+}
+
+// ---------------------------------------------------------------------------
+// GHCR image pull — shared by `pyhl setup` and any library caller going
+// through InstallSource::Ghcr.
+// ---------------------------------------------------------------------------
+
+/// OCI image references published by `.github/workflows/publish-examples.yml`.
+/// Both images are FROM-scratch payloads: kernel image has a single /kernel,
+/// initrd image has a single /initrd.cpio.
+pub const GHCR_KERNEL_IMAGE: &str =
+    "ghcr.io/danbugs/hyperlight-unikraft/python-agent-driver-kernel:latest";
+pub const GHCR_INITRD_IMAGE: &str =
+    "ghcr.io/danbugs/hyperlight-unikraft/python-agent-driver-initrd:latest";
+
+/// Pull a single file out of an OCI image hosted on GHCR. Uses whichever
+/// of `docker` / `podman` is on `$PATH`. The published images are
+/// FROM-scratch with a single payload file at a known path (`/kernel`
+/// or `/initrd.cpio`), so this is a straightforward
+/// `pull → create → cp → rm` dance.
+///
+/// Returns `Err` if neither container tool is available — callers that
+/// want a pure-library alternative should use
+/// [`InstallSource::LocalDir`] or [`InstallSource::Explicit`] instead.
+pub fn extract_from_ghcr(image: &str, src_path_in_image: &str, dst: &Path) -> Result<()> {
+    use std::process::Command;
+
+    let tool = find_on_path(&["docker", "podman"]).ok_or_else(|| {
+        anyhow!(
+            "need `docker` or `podman` on $PATH to pull the pyhl image from GHCR.\n\
+             alternatives: install one of them, or use `pyhl setup --from <local-dir>` \
+             (library callers: InstallSource::LocalDir / ::Explicit)."
+        )
+    })?;
+
+    let run = |cmd: &mut Command, label: &str| -> Result<std::process::Output> {
+        let out = cmd
+            .output()
+            .with_context(|| format!("spawn {tool} {label}"))?;
+        if !out.status.success() {
+            bail!(
+                "{tool} {label} failed (exit {:?}): {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(out)
+    };
+
+    eprintln!("pyhl:   pull {image}");
+    run(Command::new(tool).args(["pull", image]), "pull")?;
+
+    let cname = format!("pyhl-extract-{}", std::process::id());
+    let _ = Command::new(tool).args(["rm", "-f", &cname]).output();
+
+    let _ = run(
+        Command::new(tool).args(["create", "--name", &cname, image, "/bogus-entry"]),
+        "create",
+    )?;
+
+    // Guard so the tmp container is removed even if `cp` fails.
+    let _cleanup = GhcrCleanup {
+        tool: tool.to_string(),
+        cname: cname.clone(),
+    };
+
+    run(
+        Command::new(tool).args([
+            "cp",
+            &format!("{cname}:{src_path_in_image}"),
+            dst.to_str()
+                .ok_or_else(|| anyhow!("dst is not valid UTF-8"))?,
+        ]),
+        "cp",
+    )?;
+
+    Ok(())
+}
+
+struct GhcrCleanup {
+    tool: String,
+    cname: String,
+}
+
+impl Drop for GhcrCleanup {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new(&self.tool)
+            .args(["rm", "-f", &self.cname])
+            .output();
+    }
+}
+
+/// Return the first name in `names` present as an executable on `$PATH`.
+/// Avoids a `which` crate dep — we only need a boolean existence check.
+pub fn find_on_path(names: &[&'static str]) -> Option<&'static str> {
+    let path = std::env::var_os("PATH")?;
+    for name in names {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join(name);
+            if let Ok(md) = candidate.metadata() {
+                if md.is_file() {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if md.permissions().mode() & 0o111 == 0 {
+                            continue;
+                        }
+                    }
+                    return Some(name);
+                }
+            }
+        }
+    }
+    None
 }
