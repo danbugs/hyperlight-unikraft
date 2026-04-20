@@ -326,7 +326,23 @@ impl ToolRegistry {
         }
         let json = match result {
             Ok(v) => serde_json::json!({ "result": v }),
-            Err(e) => serde_json::json!({ "error": e.to_string() }),
+            Err(e) => {
+                // Normalize common error strings so the cross-platform
+                // Unikraft guest doesn't depend on host-OS-specific
+                // wording to classify the error.
+                //
+                // The guest's `lib/hostfs` substring-matches on the
+                // error payload to pick a POSIX errno. On Linux the
+                // wording is the canonical "No such file or directory";
+                // on Windows Rust produces "The system cannot find the
+                // file specified.", which fell through the match and
+                // triggered a fatal-error path in vfscore (observed
+                // crash at hostfs-posix-c:open /host/greeting.txt).
+                //
+                // Keep the underlying error code (`os error N`) in the
+                // string so downstream debugging stays faithful.
+                serde_json::json!({ "error": normalize_fs_error(&e.to_string()) })
+            }
         };
         serde_json::to_vec(&json)
             .unwrap_or_else(|_| b"{\"error\":\"serialization failed\"}".to_vec())
@@ -337,6 +353,46 @@ impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Rewrite host-OS-specific error wording to the canonical Linux form
+/// so the Unikraft guest's `lib/hostfs` can classify errors by substring
+/// match without caring which host it's running on. Linux wording is
+/// canonical because that's what the guest was written against.
+///
+/// Only rewrites the message when we can identify the error by its
+/// `os error N` suffix (that `N` is the POSIX errno — cross-platform).
+/// Otherwise passes the string through unchanged so unusual errors are
+/// still visible in debug output.
+fn normalize_fs_error(s: &str) -> String {
+    // Map: POSIX errno -> canonical Linux std::io::Error wording.
+    //
+    //   2  ENOENT  "No such file or directory"
+    //  13  EACCES  "Permission denied"
+    //  17  EEXIST  "File exists"
+    //  20  ENOTDIR "Not a directory"
+    //  21  EISDIR  "Is a directory"
+    //  39  ENOTEMPTY "Directory not empty"
+    const MAP: &[(&str, &str)] = &[
+        ("(os error 2)", "No such file or directory"),
+        ("(os error 13)", "Permission denied"),
+        ("(os error 17)", "File exists"),
+        ("(os error 20)", "Not a directory"),
+        ("(os error 21)", "Is a directory"),
+        ("(os error 39)", "Directory not empty"),
+    ];
+    for (marker, canonical) in MAP {
+        if s.contains(marker) {
+            // Keep the prefix (e.g., `fs_stat "/host/greeting.txt":`) so
+            // debugging is still legible; just replace the body wording.
+            if let Some(idx) = s.find(": ") {
+                let prefix = &s[..idx];
+                return format!("{prefix}: {canonical} {marker}");
+            }
+            return format!("{canonical} {marker}");
+        }
+    }
+    s.to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1399,6 +1455,33 @@ mod tests {
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn normalize_enoent_rewrites_windows_wording_to_linux() {
+        // Windows Rust I/O wording:
+        let win = "fs_stat \"/host/x\": The system cannot find the file specified. (os error 2)";
+        let out = normalize_fs_error(win);
+        assert!(
+            out.contains("No such file or directory"),
+            "expected Linux wording, got: {out}"
+        );
+        assert!(out.contains("(os error 2)"));
+        assert!(out.starts_with("fs_stat \"/host/x\":"));
+    }
+
+    #[test]
+    fn normalize_leaves_linux_wording_alone() {
+        let linux = "fs_stat \"/host/x\": No such file or directory (os error 2)";
+        let out = normalize_fs_error(linux);
+        assert!(out.contains("No such file or directory (os error 2)"));
+    }
+
+    #[test]
+    fn normalize_passes_unknown_errors_through() {
+        let weird = "fs_stat \"/host/x\": something extremely unusual happened";
+        let out = normalize_fs_error(weird);
+        assert_eq!(out, weird);
     }
 
     #[test]

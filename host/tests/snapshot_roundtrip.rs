@@ -109,7 +109,9 @@ fn setup() -> Option<(PathBuf, PathBuf)> {
 /// test is moot.
 #[test]
 fn multifn_init_then_restore_and_run() {
-    let Some((kernel, initrd)) = setup() else { return };
+    let Some((kernel, initrd)) = setup() else {
+        return;
+    };
 
     let mut sbox = Sandbox::builder(&kernel)
         .initrd_file(&initrd)
@@ -138,7 +140,9 @@ fn multifn_init_then_restore_and_run() {
 /// still call into the guest with the recovered state.
 #[test]
 fn snapshot_save_then_load_roundtrip() {
-    let Some((kernel, initrd)) = setup() else { return };
+    let Some((kernel, initrd)) = setup() else {
+        return;
+    };
 
     let tmp = tempdir_local("hl-snap");
     let snap_path = tmp.join("roundtrip.hls");
@@ -186,7 +190,9 @@ fn snapshot_save_then_load_roundtrip() {
 /// and fail.
 #[test]
 fn repeated_restore_run_is_stable() {
-    let Some((kernel, initrd)) = setup() else { return };
+    let Some((kernel, initrd)) = setup() else {
+        return;
+    };
 
     let mut sbox = Sandbox::builder(&kernel)
         .initrd_file(&initrd)
