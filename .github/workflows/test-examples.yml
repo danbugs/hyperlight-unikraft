@@ -216,8 +216,9 @@ jobs:
             memory: "1Gi"
             args: "-- -NoProfile -File /scripts/hello.ps1"
             expect: "Hello, World! From PowerShell on Hyperlight"
-            # Known pre-existing double-fault at 0x81ec7cd08; tracked separately.
-            continue_on_error: true
+            # Known deterministic fault at user-VA 0x81ec7cd08 during pwsh
+            # startup, reproducible in CI. Job reports FAIL honestly instead
+            # of being masked — fix the fault to turn it green.
     steps:
       - uses: actions/checkout@v4
 
@@ -299,7 +300,6 @@ jobs:
 
       - name: Run and check output
         if: steps.kvm_check.outputs.available == 'true'
-        continue-on-error: ${{ matrix.continue_on_error == true }}
         working-directory: examples/${{ matrix.example }}
         run: |
           kernel=$(ls .unikraft/build/*_hyperlight-x86_64 | head -1)
