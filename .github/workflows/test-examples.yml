@@ -464,3 +464,17 @@ jobs:
             Write-Error "FAIL: did not match /pandas_ok:/"
             exit 1
           }
+
+      - name: pyhl run --repeat 4 (exercise hermetic rewind)
+        shell: pwsh
+        run: |
+          $out = pyhl run -v --repeat 4 pandas_test.py 2>&1
+          Write-Host $out
+          # Expect the pandas output five times (run 1/5 .. run 5/5)
+          $hits = ($out | Select-String -Pattern 'pandas_ok:' -AllMatches).Matches.Count
+          if ($hits -ge 5) {
+            Write-Host "PASS: --repeat produced $hits pandas_ok lines"
+          } else {
+            Write-Error "FAIL: expected >=5 pandas_ok lines, got $hits"
+            exit 1
+          }
