@@ -314,7 +314,13 @@ jobs:
               cmd=(timeout 120 /home/runner/work/hyperlight-unikraft/hyperlight-unikraft/host/target/release/pydriver-run "$kernel" "$cpio" /tmp/tiny.py)
               ;;
             *)
-              cmd=(timeout 120 hyperlight-unikraft -q -m "${{ matrix.memory }}" "$kernel" --initrd "$cpio" $mount_args ${{ matrix.args }})
+              if [ "${{ matrix.needs_mount }}" = "true" ]; then
+                export HL_DISPATCH_DEBUG=1
+                echo "CMD: hyperlight-unikraft -m ${{ matrix.memory }} $kernel --initrd $cpio $mount_args ${{ matrix.args }}"
+                cmd=(timeout 120 hyperlight-unikraft -m "${{ matrix.memory }}" "$kernel" --initrd "$cpio" $mount_args ${{ matrix.args }})
+              else
+                cmd=(timeout 120 hyperlight-unikraft -q -m "${{ matrix.memory }}" "$kernel" --initrd "$cpio" $mount_args ${{ matrix.args }})
+              fi
               ;;
           esac
           set +e
@@ -339,9 +345,7 @@ jobs:
   # Build each example's kernel+initrd on Linux once and upload as a
   # per-example artifact. Matches the Windows runtime matrix so Windows
   # gets the same example coverage without needing kraft-hyperlight or
-  # a Linux docker toolchain on Windows. hostfs-posix-{c,py} are
-  # excluded: Windows guest-side hostfs dispatch is broken (see
-  # runtime-test-windows matrix comment).
+  # a Linux docker toolchain on Windows.
   package-images-for-windows:
     runs-on: ubuntu-latest
     needs: build-example
@@ -362,6 +366,8 @@ jobs:
           - nodejs
           - dotnet
           - dotnet-nativeaot
+          - hostfs-posix-c
+          - hostfs-posix-py
           - multifn-c
           - python-agent
           - python-agent-driver
@@ -483,11 +489,16 @@ jobs:
             memory: "512Mi"
             args: ""
             expect: "Hello, World! From .NET NativeAOT on Hyperlight"
-          # hostfs-posix-{c,py} are Linux-only in CI: on Windows the
-          # guest's first open() on /host fails. Tracked in
-          # danbugs/hyperlight-unikraft#1 — hostfs guest-side file
-          # operations over WHP need debugging. pyhl --mount on Windows
-          # works only because its tests never actually touch /host.
+          - example: hostfs-posix-c
+            memory: "16Mi"
+            args: ""
+            expect: "done\\."
+            needs_mount: true
+          - example: hostfs-posix-py
+            memory: "512Mi"
+            args: "-- /hostfs_demo.py"
+            expect: "done\\."
+            needs_mount: true
           - example: multifn-c
             memory: "4Mi"
             args: ""
@@ -569,9 +580,21 @@ jobs:
               if ($runArgs -ne '') {
                 $argList = $runArgs.Split(' ') | Where-Object { $_ -ne '' }
               }
-              $out = & hyperlight-unikraft -q -m $memory `
-                $kernel --initrd $cpio @mountArgs @argList 2>&1
-              $rc = $LASTEXITCODE
+              # For mount cells: keep host-side verbose and turn on
+              # HL_DISPATCH_DEBUG so we can see __dispatch calls in logs
+              # while tracking down danbugs/hyperlight-unikraft#1.
+              if ($needsMount -eq 'true') {
+                $env:HL_DISPATCH_DEBUG = '1'
+                Write-Host "CMD: hyperlight-unikraft -m $memory $kernel --initrd $cpio $mountArgs $argList"
+                $out = & hyperlight-unikraft -m $memory `
+                  $kernel --initrd $cpio @mountArgs @argList 2>&1
+                $rc = $LASTEXITCODE
+                $env:HL_DISPATCH_DEBUG = $null
+              } else {
+                $out = & hyperlight-unikraft -q -m $memory `
+                  $kernel --initrd $cpio @mountArgs @argList 2>&1
+                $rc = $LASTEXITCODE
+              }
             }
           }
 

@@ -22,6 +22,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
+use hyperlight_unikraft::pyhl::{copy_replace, discover_source_artifacts};
 use hyperlight_unikraft::{Preopen, Sandbox};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -299,16 +300,6 @@ fn cmd_setup(args: SetupArgs) -> Result<()> {
     Ok(())
 }
 
-/// Copy `src` → `dst`, replacing `dst` if it exists. Uses rename-into-place
-/// for the actual swap so we don't leave a half-written file on failure.
-fn copy_replace(src: &Path, dst: &Path) -> Result<()> {
-    let staging = dst.with_extension("pyhl.tmp");
-    let _ = fs::remove_file(&staging);
-    fs::copy(src, &staging)?;
-    fs::rename(&staging, dst)?;
-    Ok(())
-}
-
 /// Pull an OCI image from GHCR and extract a single file out of it. The
 /// workflow-published kernel/initrd images are FROM-scratch with a single
 /// payload file at a known path (/kernel or /initrd.cpio), so this is a
@@ -412,56 +403,6 @@ fn find_on_path(names: &[&'static str]) -> Option<&'static str> {
         }
     }
     None
-}
-
-/// Given a python-agent-driver directory, find the built kernel (under
-/// `.unikraft/build/*_hyperlight-x86_64`) and the initrd CPIO (any
-/// `*-initrd.cpio` in the directory root).
-fn discover_source_artifacts(dir: &Path) -> Result<(PathBuf, PathBuf)> {
-    if !dir.is_dir() {
-        bail!("{} is not a directory", dir.display());
-    }
-    let build = dir.join(".unikraft/build");
-    let kernel = if build.is_dir() {
-        fs::read_dir(&build)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .find(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.ends_with("_hyperlight-x86_64") && !n.ends_with(".dbg"))
-                    .unwrap_or(false)
-            })
-    } else {
-        None
-    }
-    .ok_or_else(|| {
-        anyhow!(
-            "no built kernel under {} — run `just build` (or \
-             kraft-hyperlight build --plat hyperlight --arch x86_64) \
-             in {} first",
-            build.display(),
-            dir.display()
-        )
-    })?;
-
-    let initrd = fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .find(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.ends_with("-initrd.cpio"))
-                .unwrap_or(false)
-        })
-        .ok_or_else(|| {
-            anyhow!(
-                "no *-initrd.cpio in {} — run `just rootfs` there first",
-                dir.display()
-            )
-        })?;
-
-    Ok((kernel, initrd))
 }
 
 fn mib(p: &Path) -> u64 {

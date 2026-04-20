@@ -281,10 +281,14 @@ impl Runtime {
 }
 
 // ---------------------------------------------------------------------------
-// private helpers (duplicated minimally from the bin; keep in sync)
+// Helpers shared with the `pyhl` binary. Marked `pub` (inside the `pyhl`
+// module) so the bin crate can reuse them instead of keeping a parallel
+// copy in sync.
 // ---------------------------------------------------------------------------
 
-fn copy_replace(src: &Path, dst: &Path) -> Result<()> {
+/// Atomically copy `src` → `dst`: stage to `dst.pyhl.tmp`, then rename
+/// into place so a failure doesn't leave a half-written file.
+pub fn copy_replace(src: &Path, dst: &Path) -> Result<()> {
     let staging = dst.with_extension("pyhl.tmp");
     let _ = fs::remove_file(&staging);
     fs::copy(src, &staging)?;
@@ -292,7 +296,11 @@ fn copy_replace(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn discover_source_artifacts(dir: &Path) -> Result<(PathBuf, PathBuf)> {
+/// Locate a `(kernel, initrd.cpio)` pair inside a python-agent-driver
+/// build tree: `{dir}/.unikraft/build/*_hyperlight-x86_64` for the kernel
+/// and `{dir}/*-initrd.cpio` for the rootfs. Used by `install` and by
+/// the `pyhl setup --from` CLI path.
+pub fn discover_source_artifacts(dir: &Path) -> Result<(PathBuf, PathBuf)> {
     if !dir.is_dir() {
         bail!("{} is not a directory", dir.display());
     }
@@ -312,8 +320,11 @@ fn discover_source_artifacts(dir: &Path) -> Result<(PathBuf, PathBuf)> {
     }
     .ok_or_else(|| {
         anyhow!(
-            "no built kernel under {}",
-            build.display()
+            "no built kernel under {} — run `just build` (or \
+             kraft-hyperlight build --plat hyperlight --arch x86_64) \
+             in {} first",
+            build.display(),
+            dir.display()
         )
     })?;
 
@@ -326,7 +337,12 @@ fn discover_source_artifacts(dir: &Path) -> Result<(PathBuf, PathBuf)> {
                 .map(|n| n.ends_with("-initrd.cpio"))
                 .unwrap_or(false)
         })
-        .ok_or_else(|| anyhow!("no *-initrd.cpio in {}", dir.display()))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "no *-initrd.cpio in {} — run `just rootfs` there first",
+                dir.display()
+            )
+        })?;
 
     Ok((kernel, initrd))
 }

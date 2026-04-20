@@ -287,6 +287,13 @@ impl ToolRegistry {
     }
 
     pub fn dispatch(&self, payload: &[u8]) -> Vec<u8> {
+        let debug = std::env::var("HL_DISPATCH_DEBUG").ok().map(|v| v == "1").unwrap_or(false);
+        if debug {
+            let preview = if payload.len() > 200 { &payload[..200] } else { payload };
+            eprintln!("[__dispatch] payload.len={} preview={:?}",
+                payload.len(),
+                std::str::from_utf8(preview).unwrap_or("<non-utf8>"));
+        }
         let result = (|| -> Result<serde_json::Value> {
             let req: serde_json::Value = serde_json::from_slice(payload)?;
             let name = req["name"].as_str().ok_or_else(|| anyhow!("missing 'name'"))?;
@@ -294,6 +301,12 @@ impl ToolRegistry {
             let handler = self.tools.get(name).ok_or_else(|| anyhow!("unknown tool: {}", name))?;
             handler(args)
         })();
+        if debug {
+            match &result {
+                Ok(v) => eprintln!("[__dispatch] OK: {}", v),
+                Err(e) => eprintln!("[__dispatch] ERR: {}", e),
+            }
+        }
         let json = match result {
             Ok(v) => serde_json::json!({ "result": v }),
             Err(e) => serde_json::json!({ "error": e.to_string() }),
