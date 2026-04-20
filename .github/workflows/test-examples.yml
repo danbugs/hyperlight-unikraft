@@ -326,9 +326,80 @@ jobs:
   # default image, which is enough for Hyperlight to create a VM. If that
   # changes, the `Create VM error: No hypervisor was found` message from
   # the run step is the signal — switch to a larger Windows runner class.
+  # Build the kernel + initrd on Linux (we already do this in the
+  # runtime-test job), package as a GHA artifact, and hand it to
+  # the Windows job via `pyhl setup --from`. Avoids needing docker
+  # on Windows just to pull a FROM-scratch OCI blob.
+  package-image-for-windows:
+    runs-on: ubuntu-latest
+    needs: build-example
+    permissions:
+      contents: read
+      packages: read
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Go (for kraft-hyperlight)
+        run: |
+          curl -sL https://go.dev/dl/go1.25.1.linux-amd64.tar.gz | sudo tar -C /usr/local -xz
+          echo "/usr/local/go/bin" >> $GITHUB_PATH
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Build kraft-hyperlight
+        run: |
+          git clone --branch hyperlight-platform --depth 1 \
+              https://github.com/danbugs/kraftkit.git /tmp/kraftkit
+          cd /tmp/kraftkit && go build -o kraft-hyperlight ./cmd/kraft
+          sudo mv kraft-hyperlight /usr/local/bin/
+
+      - name: Build local-python-base images
+        env:
+          DOCKER_BUILDKIT: '0'
+        run: |
+          docker build --target base -t local-python-base-dev:latest \
+              -f runtimes/python.Dockerfile runtimes/
+          docker build -t local-python-base:latest \
+              -f runtimes/python.Dockerfile runtimes/
+
+      - name: Build rootfs + kernel
+        working-directory: examples/python-agent-driver
+        env:
+          DOCKER_BUILDKIT: '0'
+        run: |
+          just rootfs
+          kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64 || true
+          if [ ! -d ".unikraft/unikraft" ] || [ -z "$(ls -A .unikraft/unikraft 2>/dev/null)" ]; then
+            UK_BRANCH=$(grep -E '^  version:' kraft.yaml | head -1 | awk '{print $2}')
+            mkdir -p .unikraft/apps .unikraft/libs
+            rm -rf .unikraft/unikraft .unikraft/apps/elfloader .unikraft/libs/libelf .unikraft/build
+            git clone --branch $UK_BRANCH --depth 1 https://github.com/danbugs/unikraft.git .unikraft/unikraft
+            git clone --branch $UK_BRANCH --depth 1 https://github.com/danbugs/app-elfloader.git .unikraft/apps/elfloader
+            git clone --branch staging --depth 1 https://github.com/unikraft/lib-libelf.git .unikraft/libs/libelf
+            kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64
+          fi
+
+      - name: Package image
+        working-directory: examples/python-agent-driver
+        run: |
+          mkdir -p /tmp/pyhl-image
+          cp .unikraft/build/python-agent-driver-hyperlight_hyperlight-x86_64 /tmp/pyhl-image/kernel
+          cp python-agent-driver-initrd.cpio /tmp/pyhl-image/initrd.cpio
+          ls -la /tmp/pyhl-image/
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyhl-image
+          path: /tmp/pyhl-image/
+          retention-days: 1
+          if-no-files-found: error
+
   runtime-test-windows:
     runs-on: windows-latest
-    needs: build-example
+    needs: package-image-for-windows
     permissions:
       contents: read
       packages: read
@@ -343,24 +414,26 @@ jobs:
             --branch ${{ github.head_ref || github.ref_name }} `
             hyperlight-unikraft-host --bin pyhl --locked --force
 
-      - name: pyhl setup (pulls image from GHCR, warms up snapshot)
+      - name: Download prebuilt image
+        uses: actions/download-artifact@v4
+        with:
+          name: pyhl-image
+          path: pyhl-image
+
+      - name: Lay out pyhl setup source dir
         shell: pwsh
         run: |
-          # windows-latest has Docker Desktop preinstalled but may not be
-          # running yet; start the engine and wait for readiness.
-          Start-Service docker 2>$null
-          $tries = 30
-          while ($tries -gt 0) {
-            docker info 2>$null | Out-Null
-            if ($LASTEXITCODE -eq 0) { break }
-            Start-Sleep -Seconds 1
-            $tries--
-          }
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "docker engine did not become ready in 30s"
-            exit 1
-          }
-          pyhl setup --force
+          # pyhl setup --from expects a build tree shape:
+          #   <dir>/.unikraft/build/*_hyperlight-x86_64     (the kernel)
+          #   <dir>/*-initrd.cpio                            (the rootfs)
+          New-Item -ItemType Directory -Force -Path src-dir/.unikraft/build | Out-Null
+          Move-Item pyhl-image/kernel src-dir/.unikraft/build/pyhl-kernel_hyperlight-x86_64
+          Move-Item pyhl-image/initrd.cpio src-dir/pyhl-initrd.cpio
+          Get-ChildItem -Recurse src-dir
+
+      - name: pyhl setup --from (warms up snapshot natively on Windows)
+        shell: pwsh
+        run: pyhl setup --from src-dir --force
 
       - name: pyhl run (hello)
         shell: pwsh
