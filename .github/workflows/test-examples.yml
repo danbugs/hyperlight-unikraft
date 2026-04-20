@@ -17,11 +17,12 @@ on:
 # because GitHub-hosted Linux runners don't expose /dev/kvm; hyperlight
 # aborts with "No hypervisor was found" before any guest code runs.
 #
-# Catches exactly the kinds of regressions that hit us this session:
+# Catches the kinds of regressions that hit us this session:
 # missing CONFIG_* guards on renamed kernel branches, NuGet version
-# drift, Dockerfile dependency issues. Doesn't catch pure runtime
-# crashes (e.g. the powershell mmap bug) — those need a self-hosted
-# runner with KVM, which we can add as a second job class later.
+# drift, Dockerfile dependency issues. The runtime-test job below
+# runs each example under KVM on ubuntu-latest and greps the guest
+# output for an expected string, so actual runtime crashes (like the
+# cpiovfs-vs-ramfs type-confusion that broke powershell) surface too.
 
 env:
   REGISTRY: ghcr.io
@@ -52,11 +53,7 @@ jobs:
           - multifn-c
           - python-agent
           - python-agent-driver
-          # powershell intentionally omitted: fresh builds currently crash at
-          # runtime with a deterministic kernel-mode SIGSEGV at 0x81ec7cd08
-          # during pwsh startup (pre-existing bug in the mmap hot-path
-          # overhaul, tracked separately). Build still passes — re-add once
-          # the runtime crash is fixed.
+          - powershell
     steps:
       - uses: actions/checkout@v4
 
@@ -138,11 +135,6 @@ jobs:
   # Full matrix — every example actually runs and its expected output is
   # greped from the guest console. This is the real regression gate;
   # build-example above only catches link-time errors.
-  #
-  # `continue-on-error` on powershell because it's a known pre-existing
-  # runtime crash at 0x81ec7cd08 (deterministic double fault, tracked
-  # separately). The job reports the failure but doesn't block the
-  # overall workflow, so CI stays useful while the investigation continues.
   runtime-test:
     runs-on: ubuntu-latest
     needs: build-example
@@ -216,9 +208,6 @@ jobs:
             memory: "1Gi"
             args: "-- -NoProfile -File /scripts/hello.ps1"
             expect: "Hello, World! From PowerShell on Hyperlight"
-            # Known deterministic fault at user-VA 0x81ec7cd08 during pwsh
-            # startup, reproducible in CI. Job reports FAIL honestly instead
-            # of being masked — fix the fault to turn it green.
     steps:
       - uses: actions/checkout@v4
 
