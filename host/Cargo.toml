@@ -33,7 +33,7 @@ path = "src/bin/pyhl.rs"
 # feature. We use it to persist a warmed-up sandbox on `pyhl setup` and
 # load it directly on every `pyhl run`, avoiding evolve + warmup per
 # invocation.
-hyperlight-host = { git = "https://github.com/danbugs/hyperlight", branch = "snapshot-to-disk", features = ["executable_heap"] }
+hyperlight-host = { git = "https://github.com/danbugs/hyperlight", branch = "snapshot-to-disk", features = ["executable_heap", "hw-interrupts"] }
 clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
 memmap2 = "0.9"
