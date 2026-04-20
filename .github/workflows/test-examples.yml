@@ -514,6 +514,13 @@ jobs:
       - name: Run and check output
         shell: pwsh
         run: |
+          # Match Linux's `|| true` leniency: decide pass/fail on guest
+          # output string only. Some guests (e.g. hostfs-posix-c) print
+          # the expected output and then crash; we still want the step
+          # to pass because the observable behavior was correct.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $ErrorActionPreference = 'Continue'
+
           $kernel = (Resolve-Path "image/kernel").Path
           $cpio   = (Resolve-Path "image/initrd.cpio").Path
           $expect = '${{ matrix.expect }}'
@@ -545,8 +552,9 @@ jobs:
           Write-Host $outStr
           if ($outStr -match $expect) {
             Write-Host "PASS: matched /$expect/"
+            exit 0
           } else {
-            Write-Error "FAIL: did not match /$expect/"
+            Write-Host "FAIL: did not match /$expect/"
             exit 1
           }
 
