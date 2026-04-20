@@ -143,6 +143,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # python-agent-driver's Dockerfile builds hl_pydriver against
+      # local-python-base-dev so the glibc/libpython ABIs match the
+      # runtime image. Materialise both locally before `just rootfs`.
+      - name: Build local-python-base and local-python-base-dev
+        env:
+          DOCKER_BUILDKIT: '0'
+        run: |
+          # Full image with dev headers (compiles hl_pydriver.c)
+          docker build --target base -t local-python-base-dev:latest \
+              -f runtimes/python.Dockerfile runtimes/
+          # Slim runtime image (ends up inside the guest rootfs)
+          docker build -t local-python-base:latest \
+              -f runtimes/python.Dockerfile runtimes/
+
+      - name: Install just
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y just || cargo install just
+
       - name: Build python-agent-driver rootfs (CPIO)
         working-directory: examples/python-agent-driver
         env:
