@@ -4,6 +4,7 @@
 //! manages the kernel lifecycle: create → evolve (init) → snapshot → call.
 
 pub mod ffi;
+pub mod pyhl;
 pub mod stderr_capture;
 
 use anyhow::{anyhow, Result};
