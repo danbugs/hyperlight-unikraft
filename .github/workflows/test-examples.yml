@@ -12,6 +12,12 @@ on:
       - 'host/**'
       - '.github/workflows/test-examples.yml'
 
+# Pushing a new commit to the same ref cancels any in-flight run on
+# the previous commit — don't waste CI on stale code.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # Build-only regression gate — each example is built from scratch
 # (rootfs + kernel) in its own job. We do NOT execute the guests
 # because GitHub-hosted Linux runners don't expose /dev/kvm; hyperlight

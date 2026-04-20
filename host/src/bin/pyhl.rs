@@ -34,8 +34,66 @@ fn parse_mount(spec: &str) -> Result<Preopen> {
     Preopen::parse_cli(spec).map_err(|e| anyhow!("invalid --mount {:?}: {}", spec, e))
 }
 
+/// Keep in sync with `py_initialize_once` in examples/python-agent-driver/
+/// hl_pydriver.c. These modules are imported during `pyhl setup`'s warmup
+/// so they're already in `sys.modules` in every `pyhl run` invocation —
+/// no per-call import cost for any of them.
+const PREIMPORTED_MODULES: &[&str] = &[
+    "numpy",
+    "pandas",
+    "pydantic",
+    "yaml",
+    "jinja2",
+    "bs4",
+    "tabulate",
+    "click",
+    "tenacity",
+    "tqdm",
+    "openpyxl",
+    "pypdf",
+    "markdown_it",
+    "PIL",
+    "lxml",
+    "cryptography",
+    "dateutil",
+    "dotenv",
+];
+
+/// Build the long-about blurb shown by `pyhl --help`. Lists the
+/// pre-imported modules so users can tell at a glance which
+/// `import`s will be "free" in their scripts.
+fn long_about() -> String {
+    let mut s = String::from(
+        "Run Python on hyperlight-unikraft.\n\n\
+         `pyhl setup` installs the python-agent-driver image and warms \
+         up a Python interpreter snapshot so `pyhl run` can start in \
+         ~100 ms hermetic per call (no Py_Initialize, no re-imports).\n\n\
+         The warmed-up snapshot already has these modules in sys.modules — \
+         your scripts can `import` them with zero cost:\n",
+    );
+    // Three columns of names, padded to 18 chars, to keep the help
+    // readable in an 80-col terminal.
+    for (i, m) in PREIMPORTED_MODULES.iter().enumerate() {
+        if i % 3 == 0 {
+            s.push_str("\n  ");
+        }
+        s.push_str(&format!("{m:<18}"));
+    }
+    s.push_str(
+        "\n\n\
+         Anything you `import` beyond this set still works — it just \
+         pays the usual import cost on first access.",
+    );
+    s
+}
+
 #[derive(Parser)]
-#[command(name = "pyhl", version, about = "Run Python on hyperlight-unikraft")]
+#[command(
+    name = "pyhl",
+    version,
+    about = "Run Python on hyperlight-unikraft",
+    long_about = long_about()
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Command,

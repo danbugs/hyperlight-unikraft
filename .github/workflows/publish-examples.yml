@@ -9,6 +9,13 @@ on:
       - 'runtimes/**'
       - '.github/workflows/publish-examples.yml'
 
+# Only one publish run per ref at a time. cancel-in-progress ensures a
+# newer commit supersedes an older publish cleanly; GHCR tags are
+# idempotent so the latest push always wins.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
   IMAGE_BASE: ghcr.io/${{ github.repository }}
