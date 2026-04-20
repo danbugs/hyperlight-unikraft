@@ -185,11 +185,13 @@ jobs:
           - example: hostfs-posix-c
             memory: "16Mi"
             args: ""
-            expect: "hostfs-posix-c"
+            expect: "done\\."
+            needs_mount: true
           - example: hostfs-posix-py
             memory: "512Mi"
             args: ""
-            expect: "."  # runs fine, no well-known hello string
+            expect: "done\\."
+            needs_mount: true
           - example: multifn-c
             memory: "4Mi"
             args: ""
@@ -294,6 +296,12 @@ jobs:
           kernel=$(ls .unikraft/build/*_hyperlight-x86_64 | head -1)
           cpio=$(ls *-initrd.cpio initrd.cpio 2>/dev/null | head -1)
           expect='${{ matrix.expect }}'
+          mount_args=""
+          if [ "${{ matrix.needs_mount }}" = "true" ]; then
+            mount_dir="$RUNNER_TEMP/hostfs-${{ matrix.example }}"
+            mkdir -p "$mount_dir"
+            mount_args="--mount $mount_dir:/host"
+          fi
           case "${{ matrix.driver }}" in
             multifn-test)
               output=$(timeout 60 /home/runner/work/hyperlight-unikraft/hyperlight-unikraft/host/target/release/multifn-test \
@@ -305,7 +313,7 @@ jobs:
               ;;
             *)
               output=$(timeout 120 hyperlight-unikraft -q -m "${{ matrix.memory }}" \
-                  "$kernel" --initrd "$cpio" ${{ matrix.args }} 2>&1 | tr -d '\0' || true)
+                  "$kernel" --initrd "$cpio" $mount_args ${{ matrix.args }} 2>&1 | tr -d '\0' || true)
               ;;
           esac
           echo "=== output ==="
@@ -467,11 +475,13 @@ jobs:
           - example: hostfs-posix-c
             memory: "16Mi"
             args: ""
-            expect: "hostfs-posix-c"
+            expect: "done\\."
+            needs_mount: true
           - example: hostfs-posix-py
             memory: "512Mi"
             args: ""
-            expect: "."
+            expect: "done\\."
+            needs_mount: true
           - example: multifn-c
             memory: "4Mi"
             args: ""
@@ -520,6 +530,17 @@ jobs:
           $driver = '${{ matrix.driver }}'
           $memory = '${{ matrix.memory }}'
           $runArgs = '${{ matrix.args }}'
+          $needsMount = '${{ matrix.needs_mount }}'
+
+          $mountArgs = @()
+          if ($needsMount -eq 'true') {
+            $mountDir = Join-Path $env:RUNNER_TEMP ('hostfs-' + '${{ matrix.example }}')
+            New-Item -ItemType Directory -Force -Path $mountDir | Out-Null
+            # Preopen::parse_cli splits on the last ':' and treats the right
+            # side as the guest path iff it starts with '/', so Windows
+            # drive-letter colons in $mountDir are handled correctly.
+            $mountArgs = @('--mount', ($mountDir + ':/host'))
+          }
 
           switch ($driver) {
             'multifn-test' {
@@ -536,7 +557,7 @@ jobs:
                 $argList = $runArgs.Split(' ') | Where-Object { $_ -ne '' }
               }
               $out = & hyperlight-unikraft -q -m $memory `
-                $kernel --initrd $cpio @argList 2>&1
+                $kernel --initrd $cpio @mountArgs @argList 2>&1
             }
           }
 
