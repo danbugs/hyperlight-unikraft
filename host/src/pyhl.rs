@@ -81,10 +81,7 @@ pub enum InstallSource<'a> {
     /// Copy from a local python-agent-driver build tree.
     LocalDir(&'a Path),
     /// Explicit files — useful for custom image pipelines.
-    Explicit {
-        kernel: &'a Path,
-        initrd: &'a Path,
-    },
+    Explicit { kernel: &'a Path, initrd: &'a Path },
 }
 
 /// Summary of an [`install`] run. Absolute paths to the installed files.
@@ -113,9 +110,7 @@ pub fn install(opts: &InstallOptions<'_>) -> Result<InstallReport> {
     let dst_snapshot = home.join(SNAPSHOT_FILE);
     let dst_version = home.join(VERSION_FILE);
 
-    let already = dst_kernel.is_file()
-        && dst_initrd.is_file()
-        && dst_snapshot.is_file();
+    let already = dst_kernel.is_file() && dst_initrd.is_file() && dst_snapshot.is_file();
     if already && !opts.force {
         return Ok(InstallReport {
             home,
@@ -127,14 +122,12 @@ pub fn install(opts: &InstallOptions<'_>) -> Result<InstallReport> {
         });
     }
 
-    fs::create_dir_all(&home)
-        .with_context(|| format!("create image home {}", home.display()))?;
+    fs::create_dir_all(&home).with_context(|| format!("create image home {}", home.display()))?;
 
     let (src_label, src_kernel, src_initrd) = match &opts.source {
         InstallSource::LocalDir(dir) => {
-            let (k, i) = discover_source_artifacts(dir).with_context(|| {
-                format!("scan {} for image artifacts", dir.display())
-            })?;
+            let (k, i) = discover_source_artifacts(dir)
+                .with_context(|| format!("scan {} for image artifacts", dir.display()))?;
             (format!("local:{}", dir.display()), k, i)
         }
         InstallSource::Explicit { kernel, initrd } => (
@@ -265,8 +258,8 @@ impl Runtime {
 
     /// Convenience: read a file and run its contents.
     pub fn run_script(&mut self, path: &Path) -> Result<RunTiming> {
-        let code = fs::read_to_string(path)
-            .with_context(|| format!("read script {}", path.display()))?;
+        let code =
+            fs::read_to_string(path).with_context(|| format!("read script {}", path.display()))?;
         self.run_code(&code)
     }
 

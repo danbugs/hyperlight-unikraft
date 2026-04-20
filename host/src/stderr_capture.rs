@@ -4,7 +4,6 @@
 //! On Windows: no-op (VM output goes to inherited stderr, which the
 //! kraftkit subprocess driver captures via exec.Command).
 
-
 #[cfg(unix)]
 mod imp {
     use anyhow::Result;

@@ -24,12 +24,8 @@ fn main() -> Result<()> {
     let kernel = args
         .next()
         .ok_or_else(|| anyhow!("usage: pydriver-run <kernel> <initrd> <script> [--repeat N]"))?;
-    let initrd = args
-        .next()
-        .ok_or_else(|| anyhow!("missing <initrd>"))?;
-    let script_path = args
-        .next()
-        .ok_or_else(|| anyhow!("missing <script>"))?;
+    let initrd = args.next().ok_or_else(|| anyhow!("missing <initrd>"))?;
+    let script_path = args.next().ok_or_else(|| anyhow!("missing <script>"))?;
     let mut repeat: u32 = 0;
     while let Some(a) = args.next() {
         if a == "--repeat" {
@@ -76,12 +72,7 @@ fn main() -> Result<()> {
         let tc = Instant::now();
         let _: () = sandbox.call_named("run", script.clone())?;
         let call_ms = tc.elapsed().as_secs_f64() * 1000.0;
-        eprintln!(
-            "[run {}/{}] call={:.1}ms (warm)",
-            i,
-            repeat + 1,
-            call_ms,
-        );
+        eprintln!("[run {}/{}] call={:.1}ms (warm)", i, repeat + 1, call_ms,);
     }
 
     Ok(())

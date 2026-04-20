@@ -1,0 +1,54 @@
+name: Host checks (fmt, clippy, tests)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'host/**'
+      - '.github/workflows/host-checks.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'host/**'
+      - '.github/workflows/host-checks.yml'
+
+# Fast per-PR gate: runs unit + integration tests, rustfmt check, and
+# clippy with warnings-as-errors on the host crate. Matches the style
+# upstream hyperlight uses. The integration tests in host/tests/ boot
+# a Unikraft kernel via KVM, so this job requires /dev/kvm on the
+# runner (same udev trick as test-examples.yml).
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: host
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --component rustfmt,clippy
+
+      - name: Cargo fmt (check only)
+        run: cargo fmt --all -- --check
+
+      - name: Cargo clippy (warnings are errors)
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Enable KVM permissions
+        working-directory: .
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Cargo test
+        env:
+          # Fewer integration-test iterations in CI — the test bodies
+          # skip themselves if /dev/kvm isn't available.
+          RUST_BACKTRACE: '1'
+        run: cargo test --all-targets --locked

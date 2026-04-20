@@ -2,6 +2,13 @@
 //!
 //! This module exposes a thread-safe, opaque-handle-based API for creating,
 //! running, and managing Hyperlight-backed Unikraft VMs from C/Go code.
+//!
+//! The FFI surface takes raw `*mut HlVm` / `*const HlVm` handles so a C
+//! caller can hold an opaque pointer across calls. Dereferencing those
+//! pointers is inherently unsafe and the caller is responsible for only
+//! passing handles we returned. Hence the module-wide allow.
+
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
@@ -39,7 +46,7 @@ pub struct HlVm {
 #[repr(C)]
 pub struct HlConfig {
     pub kernel_path: *const c_char,
-    pub initrd_path: *const c_char, // nullable
+    pub initrd_path: *const c_char,     // nullable
     pub app_args: *const *const c_char, // nullable, null-terminated array
     pub app_args_count: c_int,
     pub heap_size: u64,
@@ -138,8 +145,8 @@ pub extern "C" fn hl_vm_create(config: *const HlConfig) -> *mut HlVm {
     };
 
     // Prepend cmdline to initrd if we have app args
-    let initrd_data = prepend_cmdline_to_initrd(initrd_data.as_deref(), &app_args, &[])
-        .or(initrd_data);
+    let initrd_data =
+        prepend_cmdline_to_initrd(initrd_data.as_deref(), &app_args, &[]).or(initrd_data);
 
     let vm = Box::new(HlVm {
         status: AtomicI32::new(HL_STATUS_CREATED),
@@ -173,7 +180,12 @@ pub extern "C" fn hl_vm_start(vm: *mut HlVm) -> c_int {
     let expected = HL_STATUS_CREATED;
     if vm
         .status
-        .compare_exchange(expected, HL_STATUS_RUNNING, Ordering::SeqCst, Ordering::SeqCst)
+        .compare_exchange(
+            expected,
+            HL_STATUS_RUNNING,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
         .is_err()
     {
         set_last_error("VM is not in CREATED state");
@@ -190,7 +202,13 @@ pub extern "C" fn hl_vm_start(vm: *mut HlVm) -> c_int {
     let vm_ptr = vm as *const HlVm as usize;
 
     let handle = std::thread::spawn(move || {
-        let result = run_vm_on_thread(&kernel_path, initrd_data.as_deref(), heap_size, stack_size, &output);
+        let result = run_vm_on_thread(
+            &kernel_path,
+            initrd_data.as_deref(),
+            heap_size,
+            stack_size,
+            &output,
+        );
 
         let vm = unsafe { &*(vm_ptr as *const HlVm) };
         match result {
@@ -231,18 +249,18 @@ fn run_vm_on_thread(
     // In v0.13.1+, stack is part of the guest heap memory region
     sandbox_config.set_heap_size(heap_size + stack_size);
 
-    let env = GuestEnvironment::new(
-        GuestBinary::FilePath(kernel_path.to_string()),
-        initrd_data,
-    );
+    let env = GuestEnvironment::new(GuestBinary::FilePath(kernel_path.to_string()), initrd_data);
 
     let sandbox = UninitializedSandbox::new(env, Some(sandbox_config))?;
 
     // Capture stderr to a temp file while the VM runs. Unikraft console output
     // goes through Hyperlight's `eprint!` → process stderr. See
     // stderr_capture module for the platform-specific redirect.
-    let capture_file = std::env::temp_dir()
-        .join(format!("hl-ffi-capture-{}-{:p}", std::process::id(), output));
+    let capture_file = std::env::temp_dir().join(format!(
+        "hl-ffi-capture-{}-{:p}",
+        std::process::id(),
+        output
+    ));
     let capture = crate::stderr_capture::Capture::redirect_to_file(&capture_file)?;
 
     // Evolve runs the unikernel to completion (blocks until HLT)

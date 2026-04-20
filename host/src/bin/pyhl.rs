@@ -131,9 +131,7 @@ fn resolve_home(explicit: Option<&Path>, mode: ResolveMode) -> Result<PathBuf> {
     if let Some(p) = explicit {
         return Ok(p.to_path_buf());
     }
-    let cwd = std::env::current_dir()
-        .context("read cwd")?
-        .join(CWD_HOME);
+    let cwd = std::env::current_dir().context("read cwd")?.join(CWD_HOME);
     let xdg = xdg_share_home().join("pyhl");
 
     match mode {
@@ -210,14 +208,12 @@ fn cmd_setup(args: SetupArgs) -> Result<()> {
         return Ok(());
     }
 
-    fs::create_dir_all(&home)
-        .with_context(|| format!("create image home {}", home.display()))?;
+    fs::create_dir_all(&home).with_context(|| format!("create image home {}", home.display()))?;
 
     let (source_label, src_kernel, src_initrd) = match args.from.as_deref() {
         Some(dir) => {
-            let (k, i) = discover_source_artifacts(dir).with_context(|| {
-                format!("scanning {} for image artifacts", dir.display())
-            })?;
+            let (k, i) = discover_source_artifacts(dir)
+                .with_context(|| format!("scanning {} for image artifacts", dir.display()))?;
             (dir.display().to_string(), k, i)
         }
         None => {
@@ -231,7 +227,11 @@ fn cmd_setup(args: SetupArgs) -> Result<()> {
             let initrd_path = tmp.join("initrd.cpio");
             extract_from_ghcr(GHCR_KERNEL_IMAGE, "/kernel", &kernel_path)?;
             extract_from_ghcr(GHCR_INITRD_IMAGE, "/initrd.cpio", &initrd_path)?;
-            (format!("{GHCR_KERNEL_IMAGE} + {GHCR_INITRD_IMAGE}"), kernel_path, initrd_path)
+            (
+                format!("{GHCR_KERNEL_IMAGE} + {GHCR_INITRD_IMAGE}"),
+                kernel_path,
+                initrd_path,
+            )
         }
     };
 
@@ -294,9 +294,21 @@ fn cmd_setup(args: SetupArgs) -> Result<()> {
     fs::write(&dst_version, version)?;
 
     eprintln!("pyhl: installed image to {}", home.display());
-    eprintln!("  kernel:   {} ({} MiB)", dst_kernel.display(), mib(&dst_kernel));
-    eprintln!("  initrd:   {} ({} MiB)", dst_initrd.display(), mib(&dst_initrd));
-    eprintln!("  snapshot: {} ({} MiB)", dst_snapshot.display(), mib(&dst_snapshot));
+    eprintln!(
+        "  kernel:   {} ({} MiB)",
+        dst_kernel.display(),
+        mib(&dst_kernel)
+    );
+    eprintln!(
+        "  initrd:   {} ({} MiB)",
+        dst_initrd.display(),
+        mib(&dst_initrd)
+    );
+    eprintln!(
+        "  snapshot: {} ({} MiB)",
+        dst_snapshot.display(),
+        mib(&dst_snapshot)
+    );
     Ok(())
 }
 
@@ -318,7 +330,9 @@ fn extract_from_ghcr(image: &str, src_path_in_image: &str, dst: &Path) -> Result
     })?;
 
     let run = |cmd: &mut Command, label: &str| -> Result<std::process::Output> {
-        let out = cmd.output().with_context(|| format!("spawn {tool} {label}"))?;
+        let out = cmd
+            .output()
+            .with_context(|| format!("spawn {tool} {label}"))?;
         if !out.status.success() {
             bail!(
                 "{tool} {label} failed (exit {:?}): {}",

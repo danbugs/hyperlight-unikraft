@@ -9,9 +9,9 @@ pub mod stderr_capture;
 
 use anyhow::{anyhow, Result};
 use hyperlight_host::func::Registerable;
+use hyperlight_host::sandbox::snapshot::Snapshot;
 use hyperlight_host::sandbox::uninitialized::GuestEnvironment;
 use hyperlight_host::sandbox::SandboxConfiguration;
-use hyperlight_host::sandbox::snapshot::Snapshot;
 use hyperlight_host::{GuestBinary, MultiUseSandbox, UninitializedSandbox};
 use std::collections::HashMap;
 use std::path::Path;
@@ -35,9 +35,7 @@ const PAGE_SIZE: usize = 4096;
 
 /// Guest paths that would shadow the kernel's own ramfs and break the VM.
 /// Reject these early on the host before we even boot the guest.
-const RESERVED_GUEST_MOUNTPOINTS: &[&str] = &[
-    "/", "/bin", "/dev", "/proc", "/sys", "/usr",
-];
+const RESERVED_GUEST_MOUNTPOINTS: &[&str] = &["/", "/bin", "/dev", "/proc", "/sys", "/usr"];
 
 /// A preopened host directory exposed to the guest.
 ///
@@ -64,9 +62,7 @@ impl Preopen {
             ));
         }
         for reserved in RESERVED_GUEST_MOUNTPOINTS {
-            if guest_path == *reserved
-                || guest_path.starts_with(&format!("{}/", reserved))
-            {
+            if guest_path == *reserved || guest_path.starts_with(&format!("{}/", reserved)) {
                 return Err(anyhow!(
                     "refusing to mount at guest path {:?}: shadows reserved kernel dir",
                     guest_path
@@ -74,9 +70,16 @@ impl Preopen {
             }
         }
         let host_dir = std::fs::canonicalize(host_dir.as_ref()).map_err(|e| {
-            anyhow!("canonicalize preopen host dir {:?}: {}", host_dir.as_ref(), e)
+            anyhow!(
+                "canonicalize preopen host dir {:?}: {}",
+                host_dir.as_ref(),
+                e
+            )
         })?;
-        Ok(Self { host_dir, guest_path })
+        Ok(Self {
+            host_dir,
+            guest_path,
+        })
     }
 
     /// Parse a `HOST[:GUEST]` CLI argument. When `GUEST` is omitted the
@@ -97,10 +100,10 @@ impl Preopen {
     }
 }
 
-/// Guest VA for the initrd mapped via map_file_cow.
-/// Computed dynamically in new_with_file_initrd to be after the
-/// primary shared memory region, page-aligned.
-/// Falls back to 2 GiB if the sandbox config doesn't have heap info.
+// Guest VA for the initrd mapped via map_file_cow.
+// Computed dynamically in new_with_file_initrd to be after the
+// primary shared memory region, page-aligned.
+// Falls back to 2 GiB if the sandbox config doesn't have heap info.
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -165,7 +168,8 @@ pub fn parse_memory(mem_str: &str) -> Result<u64> {
     } else if let Some(v) = s.strip_suffix("K") {
         Ok(v.parse::<u64>()? * 1000)
     } else {
-        s.parse().map_err(|e| anyhow!("Invalid memory format: {}", e))
+        s.parse()
+            .map_err(|e| anyhow!("Invalid memory format: {}", e))
     }
 }
 
@@ -182,11 +186,7 @@ pub fn parse_memory(mem_str: &str) -> Result<u64> {
 ///
 /// Callers are responsible for any trailing padding / metadata (e.g. the
 /// mapped-initrd-size footer used by `build_cmdline_initdata`).
-fn write_cmdline_mount_tlv(
-    buf: &mut Vec<u8>,
-    cmdline_bytes: &[u8],
-    preopens: &[Preopen],
-) {
+fn write_cmdline_mount_tlv(buf: &mut Vec<u8>, cmdline_bytes: &[u8], preopens: &[Preopen]) {
     let cmdline_len = cmdline_bytes.len() as u32;
     buf.extend_from_slice(CMDLINE_MAGIC);
     buf.extend_from_slice(&cmdline_len.to_le_bytes());
@@ -271,12 +271,15 @@ pub fn prepend_cmdline_to_initrd(
 
 /// Registry of tool handlers callable from guest user-space via `/dev/hcall`.
 pub struct ToolRegistry {
-    tools: HashMap<String, Box<dyn Fn(serde_json::Value) -> Result<serde_json::Value> + Send + Sync>>,
+    tools:
+        HashMap<String, Box<dyn Fn(serde_json::Value) -> Result<serde_json::Value> + Send + Sync>>,
 }
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self { tools: HashMap::new() }
+        Self {
+            tools: HashMap::new(),
+        }
     }
 
     pub fn register<F>(&mut self, name: &str, handler: F)
@@ -287,18 +290,32 @@ impl ToolRegistry {
     }
 
     pub fn dispatch(&self, payload: &[u8]) -> Vec<u8> {
-        let debug = std::env::var("HL_DISPATCH_DEBUG").ok().map(|v| v == "1").unwrap_or(false);
+        let debug = std::env::var("HL_DISPATCH_DEBUG")
+            .ok()
+            .map(|v| v == "1")
+            .unwrap_or(false);
         if debug {
-            let preview = if payload.len() > 200 { &payload[..200] } else { payload };
-            eprintln!("[__dispatch] payload.len={} preview={:?}",
+            let preview = if payload.len() > 200 {
+                &payload[..200]
+            } else {
+                payload
+            };
+            eprintln!(
+                "[__dispatch] payload.len={} preview={:?}",
                 payload.len(),
-                std::str::from_utf8(preview).unwrap_or("<non-utf8>"));
+                std::str::from_utf8(preview).unwrap_or("<non-utf8>")
+            );
         }
         let result = (|| -> Result<serde_json::Value> {
             let req: serde_json::Value = serde_json::from_slice(payload)?;
-            let name = req["name"].as_str().ok_or_else(|| anyhow!("missing 'name'"))?;
+            let name = req["name"]
+                .as_str()
+                .ok_or_else(|| anyhow!("missing 'name'"))?;
             let args = req.get("args").cloned().unwrap_or(serde_json::Value::Null);
-            let handler = self.tools.get(name).ok_or_else(|| anyhow!("unknown tool: {}", name))?;
+            let handler = self
+                .tools
+                .get(name)
+                .ok_or_else(|| anyhow!("unknown tool: {}", name))?;
             handler(args)
         })();
         if debug {
@@ -311,12 +328,15 @@ impl ToolRegistry {
             Ok(v) => serde_json::json!({ "result": v }),
             Err(e) => serde_json::json!({ "error": e.to_string() }),
         };
-        serde_json::to_vec(&json).unwrap_or_else(|_| b"{\"error\":\"serialization failed\"}".to_vec())
+        serde_json::to_vec(&json)
+            .unwrap_or_else(|_| b"{\"error\":\"serialization failed\"}".to_vec())
     }
 }
 
 impl Default for ToolRegistry {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -348,7 +368,9 @@ impl FsSandbox {
         Ok(Self { root })
     }
 
-    pub fn root(&self) -> &Path { &self.root }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
 
     /// Resolve a guest-supplied path to a host path that is guaranteed to
     /// live under `root`. Returns an error on any escape attempt.
@@ -393,11 +415,15 @@ impl FsSandbox {
                 return Err(anyhow!("path has no existing ancestor: {:?}", logical));
             };
             tail.push(name);
-            existing = existing.parent()
+            existing = existing
+                .parent()
                 .ok_or_else(|| anyhow!("path has no existing ancestor: {:?}", logical))?;
         };
         if !resolved_ancestor.starts_with(&self.root) {
-            return Err(anyhow!("path escapes mount root (symlink): {:?}", guest_path));
+            return Err(anyhow!(
+                "path escapes mount root (symlink): {:?}",
+                guest_path
+            ));
         }
         let mut out = resolved_ancestor;
         for name in tail.into_iter().rev() {
@@ -412,7 +438,8 @@ impl FsSandbox {
 
         let s = self.clone();
         registry.register("fs_read", move |args| {
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_read: missing 'path'"))?;
             let target = s.resolve(path)?;
             let text = std::fs::read_to_string(&target)
@@ -422,9 +449,11 @@ impl FsSandbox {
 
         let s = self.clone();
         registry.register("fs_write", move |args| {
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_write: missing 'path'"))?;
-            let text = args["text"].as_str()
+            let text = args["text"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_write: missing 'text'"))?;
             let append = args["append"].as_bool().unwrap_or(false);
             let target = s.resolve(path)?;
@@ -447,8 +476,8 @@ impl FsSandbox {
             let path = args["path"].as_str().unwrap_or("");
             let target = s.resolve(path)?;
             let mut entries = Vec::new();
-            for entry in std::fs::read_dir(&target)
-                .map_err(|e| anyhow!("fs_list {:?}: {}", path, e))?
+            for entry in
+                std::fs::read_dir(&target).map_err(|e| anyhow!("fs_list {:?}: {}", path, e))?
             {
                 let entry = entry?;
                 let name = entry.file_name().to_string_lossy().into_owned();
@@ -465,11 +494,12 @@ impl FsSandbox {
 
         let s = self.clone();
         registry.register("fs_stat", move |args| {
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_stat: missing 'path'"))?;
             let target = s.resolve(path)?;
-            let md = std::fs::metadata(&target)
-                .map_err(|e| anyhow!("fs_stat {:?}: {}", path, e))?;
+            let md =
+                std::fs::metadata(&target).map_err(|e| anyhow!("fs_stat {:?}: {}", path, e))?;
             Ok(json!({
                 "size": md.len(),
                 "is_dir": md.is_dir(),
@@ -479,7 +509,8 @@ impl FsSandbox {
 
         let s = self.clone();
         registry.register("fs_mkdir", move |args| {
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_mkdir: missing 'path'"))?;
             let parents = args["parents"].as_bool().unwrap_or(false);
             let target = s.resolve(path)?;
@@ -502,7 +533,8 @@ impl FsSandbox {
         registry.register("fs_read_bytes", move |args| {
             use base64::Engine;
             use std::io::{Read, Seek, SeekFrom};
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_read_bytes: missing 'path'"))?;
             let offset = args["offset"].as_u64().unwrap_or(0);
             let want = args["len"].as_u64().unwrap_or(65536);
@@ -514,7 +546,8 @@ impl FsSandbox {
                     .map_err(|e| anyhow!("fs_read_bytes seek {:?}: {}", path, e))?;
             }
             let mut buf = vec![0u8; want as usize];
-            let n = f.read(&mut buf)
+            let n = f
+                .read(&mut buf)
                 .map_err(|e| anyhow!("fs_read_bytes {:?}: {}", path, e))?;
             buf.truncate(n);
             let eof = n < want as usize;
@@ -526,11 +559,14 @@ impl FsSandbox {
         registry.register("fs_write_bytes", move |args| {
             use base64::Engine;
             use std::io::{Seek, SeekFrom, Write};
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_write_bytes: missing 'path'"))?;
-            let data_b64 = args["data"].as_str()
+            let data_b64 = args["data"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_write_bytes: missing 'data'"))?;
-            let data = base64::engine::general_purpose::STANDARD.decode(data_b64)
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(data_b64)
                 .map_err(|e| anyhow!("fs_write_bytes: bad base64: {}", e))?;
             let offset = args["offset"].as_u64();
             let append = args["append"].as_bool().unwrap_or(false);
@@ -555,9 +591,11 @@ impl FsSandbox {
 
         let s = self.clone();
         registry.register("fs_truncate", move |args| {
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_truncate: missing 'path'"))?;
-            let length = args["length"].as_u64()
+            let length = args["length"]
+                .as_u64()
                 .ok_or_else(|| anyhow!("fs_truncate: missing 'length'"))?;
             let target = s.resolve(path)?;
             let f = std::fs::OpenOptions::new()
@@ -571,11 +609,12 @@ impl FsSandbox {
 
         let s = self.clone();
         registry.register("fs_unlink", move |args| {
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_unlink: missing 'path'"))?;
             let target = s.resolve(path)?;
-            let md = std::fs::metadata(&target)
-                .map_err(|e| anyhow!("fs_unlink {:?}: {}", path, e))?;
+            let md =
+                std::fs::metadata(&target).map_err(|e| anyhow!("fs_unlink {:?}: {}", path, e))?;
             if md.is_dir() {
                 std::fs::remove_dir(&target)
             } else {
@@ -631,10 +670,7 @@ impl FsRouter {
             if path == prefix {
                 return Ok((fs, ""));
             }
-            if let Some(tail) = path
-                .strip_prefix(prefix)
-                .and_then(|t| t.strip_prefix('/'))
-            {
+            if let Some(tail) = path.strip_prefix(prefix).and_then(|t| t.strip_prefix('/')) {
                 return Ok((fs, tail));
             }
         }
@@ -649,7 +685,8 @@ impl FsRouter {
 
         let r = self.clone();
         registry.register("fs_read", move |args| {
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_read: missing 'path'"))?;
             let (fs, rel) = r.route(path)?;
             let target = fs.resolve(rel)?;
@@ -660,17 +697,21 @@ impl FsRouter {
 
         let r = self.clone();
         registry.register("fs_write", move |args| {
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_write: missing 'path'"))?;
-            let text = args["text"].as_str()
+            let text = args["text"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_write: missing 'text'"))?;
             let append = args["append"].as_bool().unwrap_or(false);
             let (fs, rel) = r.route(path)?;
             let target = fs.resolve(rel)?;
             use std::io::Write;
             let mut f = std::fs::OpenOptions::new()
-                .write(true).create(true)
-                .truncate(!append).append(append)
+                .write(true)
+                .create(true)
+                .truncate(!append)
+                .append(append)
                 .open(&target)
                 .map_err(|e| anyhow!("fs_write {:?}: {}", path, e))?;
             f.write_all(text.as_bytes())
@@ -684,8 +725,8 @@ impl FsRouter {
             let (fs, rel) = r.route(path)?;
             let target = fs.resolve(rel)?;
             let mut entries = Vec::new();
-            for entry in std::fs::read_dir(&target)
-                .map_err(|e| anyhow!("fs_list {:?}: {}", path, e))?
+            for entry in
+                std::fs::read_dir(&target).map_err(|e| anyhow!("fs_list {:?}: {}", path, e))?
             {
                 let entry = entry?;
                 let ft = entry.file_type()?;
@@ -701,12 +742,13 @@ impl FsRouter {
 
         let r = self.clone();
         registry.register("fs_stat", move |args| {
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_stat: missing 'path'"))?;
             let (fs, rel) = r.route(path)?;
             let target = fs.resolve(rel)?;
-            let md = std::fs::metadata(&target)
-                .map_err(|e| anyhow!("fs_stat {:?}: {}", path, e))?;
+            let md =
+                std::fs::metadata(&target).map_err(|e| anyhow!("fs_stat {:?}: {}", path, e))?;
             Ok(json!({
                 "size": md.len(),
                 "is_dir": md.is_dir(),
@@ -718,7 +760,8 @@ impl FsRouter {
         registry.register("fs_read_bytes", move |args| {
             use base64::Engine;
             use std::io::{Read, Seek, SeekFrom};
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_read_bytes: missing 'path'"))?;
             let offset = args["offset"].as_u64().unwrap_or(0);
             let want = args["len"].as_u64().unwrap_or(65536);
@@ -731,7 +774,8 @@ impl FsRouter {
                     .map_err(|e| anyhow!("fs_read_bytes seek {:?}: {}", path, e))?;
             }
             let mut buf = vec![0u8; want as usize];
-            let n = f.read(&mut buf)
+            let n = f
+                .read(&mut buf)
                 .map_err(|e| anyhow!("fs_read_bytes {:?}: {}", path, e))?;
             buf.truncate(n);
             let eof = n < want as usize;
@@ -745,19 +789,24 @@ impl FsRouter {
         registry.register("fs_write_bytes", move |args| {
             use base64::Engine;
             use std::io::{Seek, SeekFrom, Write};
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_write_bytes: missing 'path'"))?;
-            let data_b64 = args["data"].as_str()
+            let data_b64 = args["data"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_write_bytes: missing 'data'"))?;
-            let data = base64::engine::general_purpose::STANDARD.decode(data_b64)
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(data_b64)
                 .map_err(|e| anyhow!("fs_write_bytes: bad base64: {}", e))?;
             let offset = args["offset"].as_u64();
             let append = args["append"].as_bool().unwrap_or(false);
             let (fs, rel) = r.route(path)?;
             let target = fs.resolve(rel)?;
             let mut f = std::fs::OpenOptions::new()
-                .write(true).create(true)
-                .truncate(offset.is_none() && !append).append(append)
+                .write(true)
+                .create(true)
+                .truncate(offset.is_none() && !append)
+                .append(append)
                 .open(&target)
                 .map_err(|e| anyhow!("fs_write_bytes {:?}: {}", path, e))?;
             if let Some(off) = offset {
@@ -773,13 +822,17 @@ impl FsRouter {
 
         let r = self.clone();
         registry.register("fs_truncate", move |args| {
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_truncate: missing 'path'"))?;
-            let length = args["length"].as_u64()
+            let length = args["length"]
+                .as_u64()
                 .ok_or_else(|| anyhow!("fs_truncate: missing 'length'"))?;
             let (fs, rel) = r.route(path)?;
             let target = fs.resolve(rel)?;
-            let f = std::fs::OpenOptions::new().write(true).open(&target)
+            let f = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&target)
                 .map_err(|e| anyhow!("fs_truncate {:?}: {}", path, e))?;
             f.set_len(length)
                 .map_err(|e| anyhow!("fs_truncate {:?}: {}", path, e))?;
@@ -788,28 +841,36 @@ impl FsRouter {
 
         let r = self.clone();
         registry.register("fs_mkdir", move |args| {
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_mkdir: missing 'path'"))?;
             let parents = args["parents"].as_bool().unwrap_or(false);
             let (fs, rel) = r.route(path)?;
             let target = fs.resolve(rel)?;
-            if parents { std::fs::create_dir_all(&target) }
-            else       { std::fs::create_dir(&target) }
-                .map_err(|e| anyhow!("fs_mkdir {:?}: {}", path, e))?;
+            if parents {
+                std::fs::create_dir_all(&target)
+            } else {
+                std::fs::create_dir(&target)
+            }
+            .map_err(|e| anyhow!("fs_mkdir {:?}: {}", path, e))?;
             Ok(json!({}))
         });
 
         let r = self.clone();
         registry.register("fs_unlink", move |args| {
-            let path = args["path"].as_str()
+            let path = args["path"]
+                .as_str()
                 .ok_or_else(|| anyhow!("fs_unlink: missing 'path'"))?;
             let (fs, rel) = r.route(path)?;
             let target = fs.resolve(rel)?;
-            let md = std::fs::metadata(&target)
-                .map_err(|e| anyhow!("fs_unlink {:?}: {}", path, e))?;
-            if md.is_dir() { std::fs::remove_dir(&target) }
-            else           { std::fs::remove_file(&target) }
-                .map_err(|e| anyhow!("fs_unlink {:?}: {}", path, e))?;
+            let md =
+                std::fs::metadata(&target).map_err(|e| anyhow!("fs_unlink {:?}: {}", path, e))?;
+            if md.is_dir() {
+                std::fs::remove_dir(&target)
+            } else {
+                std::fs::remove_file(&target)
+            }
+            .map_err(|e| anyhow!("fs_unlink {:?}: {}", path, e))?;
             Ok(json!({}))
         });
     }
@@ -934,16 +995,35 @@ impl SandboxBuilder {
             heap_size: self.heap_size.unwrap_or(512 * 1024 * 1024),
             stack_size: self.stack_size.unwrap_or(8 * 1024 * 1024),
         };
-        let tools = if self.has_tools { Some(self.tools) } else { None };
+        let tools = if self.has_tools {
+            Some(self.tools)
+        } else {
+            None
+        };
         match self.initrd {
             Some(InitrdSource::File(path)) => Sandbox::evolve_mapped(
-                &self.kernel, Some(&path), &self.args, config, tools, &self.preopens,
+                &self.kernel,
+                Some(&path),
+                &self.args,
+                config,
+                tools,
+                &self.preopens,
             ),
             Some(InitrdSource::Bytes(bytes)) => Sandbox::evolve_inline(
-                &self.kernel, Some(&bytes), &self.args, config, tools, &self.preopens,
+                &self.kernel,
+                Some(&bytes),
+                &self.args,
+                config,
+                tools,
+                &self.preopens,
             ),
             None => Sandbox::evolve_mapped(
-                &self.kernel, None, &self.args, config, tools, &self.preopens,
+                &self.kernel,
+                None,
+                &self.args,
+                config,
+                tools,
+                &self.preopens,
             ),
         }
     }
@@ -991,10 +1071,9 @@ impl Sandbox {
         if let Some(tools) = tools {
             let tools = Arc::new(tools);
             let tools_ref = tools.clone();
-            usbox.register_host_function(
-                "__dispatch",
-                move |payload: Vec<u8>| -> Vec<u8> { tools_ref.dispatch(&payload) },
-            )?;
+            usbox.register_host_function("__dispatch", move |payload: Vec<u8>| -> Vec<u8> {
+                tools_ref.dispatch(&payload)
+            })?;
         }
 
         Self::finish_evolve(usbox, None, 0)
@@ -1043,17 +1122,12 @@ impl Sandbox {
         if let Some(tools) = tools {
             let tools = Arc::new(tools);
             let tools_ref = tools.clone();
-            usbox.register_host_function(
-                "__dispatch",
-                move |payload: Vec<u8>| -> Vec<u8> { tools_ref.dispatch(&payload) },
-            )?;
+            usbox.register_host_function("__dispatch", move |payload: Vec<u8>| -> Vec<u8> {
+                tools_ref.dispatch(&payload)
+            })?;
         }
 
-        Self::finish_evolve(
-            usbox,
-            initrd_path.map(|p| p.to_path_buf()),
-            INITRD_MAP_BASE,
-        )
+        Self::finish_evolve(usbox, initrd_path.map(|p| p.to_path_buf()), INITRD_MAP_BASE)
     }
 
     fn finish_evolve(
@@ -1082,7 +1156,8 @@ impl Sandbox {
         // Re-register file mapping after restore (snapshot restore
         // unmaps all non-snapshot regions including file mappings)
         if let Some(ref path) = self.file_mapping_path {
-            self.inner.map_file_cow(path, self.file_mapping_base, Some("initrd"))?;
+            self.inner
+                .map_file_cow(path, self.file_mapping_base, Some("initrd"))?;
         }
         Ok(())
     }
@@ -1109,11 +1184,7 @@ impl Sandbox {
     ///
     /// Requires a prior `restore()` to reset guest state to the snapshot
     /// the caller wants to run against.
-    pub fn call_named<Output, Args>(
-        &mut self,
-        func_name: &str,
-        args: Args,
-    ) -> Result<Output>
+    pub fn call_named<Output, Args>(&mut self, func_name: &str, args: Args) -> Result<Output>
     where
         Output: hyperlight_host::func::SupportedReturnType,
         Args: hyperlight_host::func::ParameterTuple,
@@ -1143,9 +1214,10 @@ impl Sandbox {
     /// format and cross-platform mmap load are documented in
     /// hyperlight/docs/snapshot-file-implementation-plan.md.
     pub fn save_snapshot<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let snap = self.snapshot.as_ref().ok_or_else(|| {
-            anyhow!("no snapshot present; build() or snapshot_now() first")
-        })?;
+        let snap = self
+            .snapshot
+            .as_ref()
+            .ok_or_else(|| anyhow!("no snapshot present; build() or snapshot_now() first"))?;
         snap.to_file(path.as_ref())?;
         Ok(())
     }
@@ -1180,10 +1252,7 @@ impl Sandbox {
     /// `host_dir` side is remapped — the guest-side mount point is
     /// fixed at setup time because it lives in the snapshot's memory
     /// image.
-    pub fn from_snapshot_file_with<P: AsRef<Path>>(
-        path: P,
-        preopens: &[Preopen],
-    ) -> Result<Self> {
+    pub fn from_snapshot_file_with<P: AsRef<Path>>(path: P, preopens: &[Preopen]) -> Result<Self> {
         let loaded = Snapshot::from_file_unchecked(path.as_ref())?;
         let arc = Arc::new(loaded);
         let mut inner = MultiUseSandbox::from_snapshot(arc.clone())?;
@@ -1196,12 +1265,9 @@ impl Sandbox {
             if let Some(tools) = build_tools(None, preopens)? {
                 let tools = Arc::new(tools);
                 let tools_ref = tools.clone();
-                inner.register_host_function(
-                    "__dispatch",
-                    move |payload: Vec<u8>| -> Vec<u8> {
-                        tools_ref.dispatch(&payload)
-                    },
-                )?;
+                inner.register_host_function("__dispatch", move |payload: Vec<u8>| -> Vec<u8> {
+                    tools_ref.dispatch(&payload)
+                })?;
             }
         }
 
@@ -1238,9 +1304,7 @@ pub fn run_vm_with_tools(
     config: VmConfig,
     tools: ToolRegistry,
 ) -> Result<()> {
-    let _ = Sandbox::evolve_inline(
-        kernel_path, initrd, app_args, config, Some(tools), &[],
-    )?;
+    let _ = Sandbox::evolve_inline(kernel_path, initrd, app_args, config, Some(tools), &[])?;
     Ok(())
 }
 
@@ -1253,9 +1317,7 @@ pub fn run_vm_with_preopens(
     config: VmConfig,
     preopens: &[Preopen],
 ) -> Result<()> {
-    let _ = Sandbox::evolve_inline(
-        kernel_path, initrd, app_args, config, None, preopens,
-    )?;
+    let _ = Sandbox::evolve_inline(kernel_path, initrd, app_args, config, None, preopens)?;
     Ok(())
 }
 
@@ -1282,8 +1344,7 @@ pub fn run_vm_capture_output(
 
     // Phase 1: evolve — boots the kernel and takes a post-init snapshot.
     // No application output happens here.
-    let mut sandbox =
-        Sandbox::evolve_inline(kernel_path, initrd, app_args, config, None, &[])?;
+    let mut sandbox = Sandbox::evolve_inline(kernel_path, initrd, app_args, config, None, &[])?;
     let setup_time = setup_start.elapsed();
 
     // Redirect stderr to a temp file before the call phase
@@ -1333,11 +1394,8 @@ mod tests {
     use std::fs;
 
     fn tmpdir(label: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!(
-            "hl-fs-sandbox-{}-{}",
-            label,
-            std::process::id()
-        ));
+        let p =
+            std::env::temp_dir().join(format!("hl-fs-sandbox-{}-{}", label, std::process::id()));
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
         p
@@ -1465,18 +1523,11 @@ mod tests {
             Preopen::new(&root_a, "/data").unwrap(),
             Preopen::new(&root_b, "/logs").unwrap(),
         ];
-        let buf = build_cmdline_initdata(
-            &["/hello".to_string()],
-            0,
-            &preopens,
-        )
-        .expect("initdata");
+        let buf = build_cmdline_initdata(&["/hello".to_string()], 0, &preopens).expect("initdata");
         assert!(buf.starts_with(CMDLINE_MAGIC), "cmdline magic missing");
         let off = find_subslice(&buf, MOUNT_MAGIC).expect("mount magic missing");
         let count_off = off + MOUNT_MAGIC.len();
-        let count = u32::from_le_bytes(
-            buf[count_off..count_off + 4].try_into().unwrap(),
-        );
+        let count = u32::from_le_bytes(buf[count_off..count_off + 4].try_into().unwrap());
         assert_eq!(count, 2);
         // First path is /data, second is /logs.
         let mut p = count_off + 4;
@@ -1490,11 +1541,12 @@ mod tests {
 
     #[test]
     fn initdata_omits_mount_tlv_when_no_preopens() {
-        let buf = build_cmdline_initdata(&["/hello".to_string()], 0, &[])
-            .expect("initdata");
+        let buf = build_cmdline_initdata(&["/hello".to_string()], 0, &[]).expect("initdata");
         assert!(buf.starts_with(CMDLINE_MAGIC));
-        assert!(find_subslice(&buf, MOUNT_MAGIC).is_none(),
-                "no mount TLV expected");
+        assert!(
+            find_subslice(&buf, MOUNT_MAGIC).is_none(),
+            "no mount TLV expected"
+        );
     }
 
     #[test]

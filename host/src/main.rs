@@ -12,7 +12,11 @@ use hyperlight_unikraft::{parse_memory, Preopen, Sandbox};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "hyperlight-unikraft", version, about = "Run Unikraft unikernels on Hyperlight")]
+#[command(
+    name = "hyperlight-unikraft",
+    version,
+    about = "Run Unikraft unikernels on Hyperlight"
+)]
 struct Args {
     /// Path to the Unikraft kernel binary
     kernel: PathBuf,
@@ -65,8 +69,7 @@ struct Args {
     /// code can contain arbitrary spaces, quotes, newlines, etc.
     ///
     /// Conflicts with positional `-- <args>`.
-    #[arg(long, short = 'e', conflicts_with = "app_args",
-          value_name = "CODE")]
+    #[arg(long, short = 'e', conflicts_with = "app_args", value_name = "CODE")]
     exec: Option<String>,
 
     /// Application arguments (passed after --)
@@ -160,7 +163,7 @@ fn main() -> Result<()> {
         builder = builder.preopen(p);
     }
     if args.enable_tools {
-        builder = builder.tool("echo", |a| Ok(a));
+        builder = builder.tool("echo", Ok);
     }
     let mut sandbox = builder.build()?;
     let evolve_time = t0.elapsed();
