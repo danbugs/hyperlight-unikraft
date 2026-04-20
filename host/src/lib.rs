@@ -1122,6 +1122,46 @@ impl Sandbox {
         self.snapshot = Some(snap);
         Ok(())
     }
+
+    /// Persist the current post-evolve (or post-`snapshot_now`) snapshot
+    /// to disk so a later process can skip evolve + init and go straight
+    /// to `call`. Uses hyperlight's `Snapshot::to_file` — the file
+    /// format and cross-platform mmap load are documented in
+    /// hyperlight/docs/snapshot-file-implementation-plan.md.
+    pub fn save_snapshot<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let snap = self.snapshot.as_ref().ok_or_else(|| {
+            anyhow!("no snapshot present; build() or snapshot_now() first")
+        })?;
+        snap.to_file(path.as_ref())?;
+        Ok(())
+    }
+
+    /// Load a previously-persisted snapshot from disk and create a
+    /// `Sandbox` directly from it, bypassing the entire evolve path.
+    /// Every subsequent `call*` runs against the snapshot's post-warmup
+    /// state; `restore()` rewinds to it.
+    ///
+    /// This is the `pyhl run` fast path: `pyhl setup` persists the
+    /// warm-Python snapshot once, and every `pyhl run` instantiates
+    /// straight from it — no kernel boot, no Py_Initialize.
+    ///
+    /// Uses `Snapshot::from_file_unchecked`, which skips the SHA-256
+    /// verification over the file. We trust snapshots written by our
+    /// own `save_snapshot()` earlier in the same process family (the
+    /// pyhl install dir), and the hash verify alone costs ~500ms on
+    /// a 2.5 GB snapshot — enough to double the whole `pyhl run` wall
+    /// time on simple scripts.
+    pub fn from_snapshot_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let loaded = Snapshot::from_file_unchecked(path.as_ref())?;
+        let arc = Arc::new(loaded);
+        let inner = MultiUseSandbox::from_snapshot(arc.clone())?;
+        Ok(Self {
+            inner,
+            snapshot: Some(arc),
+            file_mapping_path: None,
+            file_mapping_base: 0,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

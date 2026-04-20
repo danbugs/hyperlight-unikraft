@@ -95,6 +95,7 @@ struct RunArgs {
 const CWD_HOME: &str = ".pyhl";
 const KERNEL_FILE: &str = "kernel";
 const INITRD_FILE: &str = "initrd.cpio";
+const SNAPSHOT_FILE: &str = "snapshot.hls";
 const VERSION_FILE: &str = "VERSION";
 
 /// Resolve the image home to use. Tries (in order): explicit, PYHL_HOME,
@@ -170,15 +171,17 @@ fn cmd_setup(args: SetupArgs) -> Result<()> {
 
     let dst_kernel = home.join(KERNEL_FILE);
     let dst_initrd = home.join(INITRD_FILE);
+    let dst_snapshot = home.join(SNAPSHOT_FILE);
     let dst_version = home.join(VERSION_FILE);
 
-    if image_installed(&home) && !args.force {
+    if image_installed(&home) && dst_snapshot.is_file() && !args.force {
         eprintln!(
             "pyhl: image already installed at {} (use --force to overwrite)",
             home.display()
         );
-        eprintln!("  kernel:  {}", dst_kernel.display());
-        eprintln!("  initrd:  {}", dst_initrd.display());
+        eprintln!("  kernel:   {}", dst_kernel.display());
+        eprintln!("  initrd:   {}", dst_initrd.display());
+        eprintln!("  snapshot: {}", dst_snapshot.display());
         return Ok(());
     }
 
@@ -218,19 +221,43 @@ fn cmd_setup(args: SetupArgs) -> Result<()> {
         let _ = fs::remove_dir_all(&scratch);
     }
 
+    // Warm up a sandbox, take a snapshot after Py_Initialize + preloaded
+    // imports, and persist it to disk. Every subsequent `pyhl run`
+    // will MultiUseSandbox::from_snapshot() this file, which skips both
+    // kernel boot (evolve) and the 3.5s Python warmup — the whole cost
+    // is paid here, once.
+    eprintln!("pyhl: warming up Python and persisting snapshot…");
+    let t_warm = Instant::now();
+    {
+        let mut sbox = Sandbox::builder(&dst_kernel)
+            .initrd_file(&dst_initrd)
+            .heap_size(2 * 1024 * 1024 * 1024)
+            .build()?;
+        sbox.restore()?;
+        let _: () = sbox.call_named("run", "pass".to_string())?;
+        sbox.snapshot_now()?;
+        sbox.save_snapshot(&dst_snapshot)?;
+    }
+    eprintln!(
+        "pyhl:   warmup + persist = {:.1}s (one-time)",
+        t_warm.elapsed().as_secs_f64()
+    );
+
     let version = format!(
-        "pyhl {pyhl_ver}\nsource: {src}\nkernel: {kern}\ninitrd: {initrd}\ninstalled: {ts}\n",
+        "pyhl {pyhl_ver}\nsource: {src}\nkernel: {kern}\ninitrd: {initrd}\nsnapshot: {snap}\ninstalled: {ts}\n",
         pyhl_ver = env!("CARGO_PKG_VERSION"),
         src = source_label,
         kern = src_kernel.display(),
         initrd = src_initrd.display(),
+        snap = dst_snapshot.display(),
         ts = now_iso8601(),
     );
     fs::write(&dst_version, version)?;
 
     eprintln!("pyhl: installed image to {}", home.display());
-    eprintln!("  kernel:  {} ({} MiB)", dst_kernel.display(), mib(&dst_kernel));
-    eprintln!("  initrd:  {} ({} MiB)", dst_initrd.display(), mib(&dst_initrd));
+    eprintln!("  kernel:   {} ({} MiB)", dst_kernel.display(), mib(&dst_kernel));
+    eprintln!("  initrd:   {} ({} MiB)", dst_initrd.display(), mib(&dst_initrd));
+    eprintln!("  snapshot: {} ({} MiB)", dst_snapshot.display(), mib(&dst_snapshot));
     Ok(())
 }
 
@@ -427,47 +454,43 @@ fn cmd_run(args: RunArgs) -> Result<()> {
     };
 
     let home = resolve_home(args.dest.as_deref(), ResolveMode::ForRun)?;
-    let kernel = home.join(KERNEL_FILE);
-    let initrd = home.join(INITRD_FILE);
+    let snapshot = home.join(SNAPSHOT_FILE);
 
-    let t_evolve = Instant::now();
-    let mut sandbox = Sandbox::builder(&kernel)
-        .initrd_file(&initrd)
-        // 2 GiB has held for every workload tested — the driver preloads
-        // numpy + pandas + friends, which alone wants ~500 MiB of heap
-        // plus headroom for user code.
-        .heap_size(2 * 1024 * 1024 * 1024)
-        .build()?;
+    // Fast path: `pyhl setup` already warmed up a sandbox, ran
+    // Py_Initialize + preloaded modules, captured the state, and
+    // persisted it to snapshot.hls. Here we mmap that file back and
+    // instantiate a sandbox directly — no kernel boot, no Python init.
+    if !snapshot.is_file() {
+        return Err(anyhow!(
+            "no warmed-up snapshot at {}.\n\
+             run `pyhl setup` first (or `pyhl setup --force` if you have\n\
+             an older install without the snapshot file).",
+            snapshot.display()
+        ));
+    }
+
+    let t_load = Instant::now();
+    let mut sandbox = Sandbox::from_snapshot_file(&snapshot)?;
     if args.verbose {
         eprintln!(
-            "[pyhl] evolve={:.1}ms",
-            t_evolve.elapsed().as_secs_f64() * 1000.0
+            "[pyhl] load_snapshot={:.1}ms",
+            t_load.elapsed().as_secs_f64() * 1000.0
         );
     }
 
-    // First call into the guest triggers hl_pydriver's main(): Py_Initialize
-    // + preload 17 modules + register the v2 dispatch callback. We eat that
-    // cost up-front with a no-op script so the user's actual code never sees
-    // it, then snapshot_now() captures the warm state. Every subsequent
-    // call restore()s to that snapshot, so each user run is hermetic —
-    // __main__ globals, sys.modules accumulated during the run, etc. don't
-    // leak into the next one.
-    sandbox.restore()?;
-    let t_warm = Instant::now();
-    let _: () = sandbox.call_named("run", "pass".to_string())?;
-    if args.verbose {
-        eprintln!(
-            "[pyhl] warmup={:.1}ms",
-            t_warm.elapsed().as_secs_f64() * 1000.0
-        );
-    }
-    sandbox.snapshot_now()?;
-
+    // The loaded snapshot IS the warm state. On the first iteration we
+    // can go straight to `call` — the sandbox is already at that state.
+    // Restore between subsequent iterations to keep them hermetic
+    // (rewinds globals + any stdout buffering from the previous call).
     let total = args.repeat + 1;
     for i in 1..=total {
-        let t_restore = Instant::now();
-        sandbox.restore()?;
-        let restore_ms = t_restore.elapsed().as_secs_f64() * 1000.0;
+        let restore_ms = if i == 1 {
+            0.0
+        } else {
+            let t_restore = Instant::now();
+            sandbox.restore()?;
+            t_restore.elapsed().as_secs_f64() * 1000.0
+        };
 
         let t_call = Instant::now();
         let _: () = sandbox.call_named("run", code.clone())?;

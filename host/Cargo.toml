@@ -27,12 +27,13 @@ name = "pyhl"
 path = "src/bin/pyhl.rs"
 
 [dependencies]
-# Temporarily point at danbugs/hyperlight fix-map-file-cow-unaligned while
-# hyperlight-dev/hyperlight#1388 is in review. That branch is upstream `main`
-# plus the unaligned map_file_cow fix, without which initrd cpios whose size
-# is not a multiple of the page size fail to map on Windows. Revert to
-# hyperlight-dev/hyperlight `main` once #1388 merges.
-hyperlight-host = { git = "https://github.com/danbugs/hyperlight", branch = "fix-map-file-cow-unaligned", features = ["executable_heap"] }
+# Point at danbugs/hyperlight snapshot-to-disk, which is upstream main
+# (the map_file_cow unaligned fix landed there) plus a squashed port of
+# hyperlight-dev/hyperlight#1373 — Ludvig's Snapshot::to_file/from_file
+# feature. We use it to persist a warmed-up sandbox on `pyhl setup` and
+# load it directly on every `pyhl run`, avoiding evolve + warmup per
+# invocation.
+hyperlight-host = { git = "https://github.com/danbugs/hyperlight", branch = "snapshot-to-disk", features = ["executable_heap"] }
 clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
 memmap2 = "0.9"
