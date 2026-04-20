@@ -296,9 +296,16 @@ jobs:
           # Strict mode: expected output must appear AND the driver
           # process must exit cleanly. A guest that prints the right
           # banner and then crashes no longer counts as passing.
-          set -o pipefail
-          kernel=$(ls .unikraft/build/*_hyperlight-x86_64 | head -1)
-          cpio=$(ls *-initrd.cpio initrd.cpio 2>/dev/null | head -1)
+          # NOTE: `set -o pipefail` is scoped to the driver invocation
+          # below, not applied globally — otherwise the artifact-lookup
+          # pipelines fail when one of the glob patterns doesn't match.
+          kernel=$(ls .unikraft/build/*_hyperlight-x86_64 2>/dev/null | head -1 || true)
+          cpio=$(ls *-initrd.cpio initrd.cpio 2>/dev/null | head -1 || true)
+          if [ -z "$kernel" ] || [ -z "$cpio" ]; then
+            echo "FAIL: missing kernel ($kernel) or initrd ($cpio)"
+            ls -la .unikraft/build/ *.cpio 2>&1 | head -40 || true
+            exit 1
+          fi
           expect='${{ matrix.expect }}'
           mount_args=""
           if [ "${{ matrix.needs_mount }}" = "true" ]; then
