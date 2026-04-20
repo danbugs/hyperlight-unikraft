@@ -176,8 +176,8 @@ jobs:
             expect: "Hello from Python on Hyperlight"
           - example: python-tools
             memory: "1Gi"
-            args: ""
-            expect: "Python"
+            args: "--enable-tools -- /test_tools.py"
+            expect: "Tool returned"
           - example: nodejs
             memory: "512Mi"
             args: "-- /app/hello.js"
