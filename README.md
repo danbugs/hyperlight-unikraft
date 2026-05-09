@@ -83,12 +83,12 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 cargo install just
 
 # 2. kraft-hyperlight (builds Unikraft kernels)
-git clone --branch hyperlight-platform https://github.com/danbugs/kraftkit.git
+git clone --branch hyperlight-platform https://github.com/unikraft/kraftkit.git
 cd kraftkit && go build -o kraft-hyperlight ./cmd/kraft
 sudo mv kraft-hyperlight /usr/local/bin/ && cd ..
 
 # 3. This repo + host CLI
-git clone https://github.com/danbugs/hyperlight-unikraft.git
+git clone https://github.com/hyperlight-dev/hyperlight-unikraft.git
 cd hyperlight-unikraft/host
 cargo build --release
 sudo cp target/release/hyperlight-unikraft /usr/local/bin/
@@ -116,7 +116,7 @@ just rootfs && just build
 cd ../..
 
 # Install pyhl
-cargo install --git https://github.com/danbugs/hyperlight-unikraft \
+cargo install --git https://github.com/hyperlight-dev/hyperlight-unikraft \
     hyperlight-unikraft-host --bin pyhl
 
 # Point pyhl at the image you just built — creates ./.pyhl/ in cwd
@@ -146,7 +146,7 @@ exits 0; pass `--force` to overwrite. Artifacts are found via
 cargo install just
 
 # 2. This repo + host CLI
-git clone https://github.com/danbugs/hyperlight-unikraft.git
+git clone https://github.com/hyperlight-dev/hyperlight-unikraft.git
 cd hyperlight-unikraft\host
 cargo build --release
 Copy-Item target\release\hyperlight-unikraft.exe $env:USERPROFILE\.cargo\bin\ -Force
@@ -154,7 +154,7 @@ cd ..
 
 # 3. Run any example (kernel pulled from GHCR)
 cd examples\helloworld-c
-just build      # docker pull ghcr.io/danbugs/hyperlight-unikraft/helloworld-c-kernel
+just build      # docker pull ghcr.io/hyperlight-dev/hyperlight-unikraft/helloworld-c-kernel
 just rootfs     # docker build + extract CPIO
 just run
 ```
@@ -204,7 +204,7 @@ Every path the guest sends is resolved relative to `HOST_DIR` and any
 escape (via `..` or symlinks) is rejected host-side.
 
 Known limitation: `opendir`/`readdir` don't work yet (see
-[lib/hostfs/README.md](https://github.com/danbugs/unikraft/blob/hyperlight-platform/lib/hostfs/README.md)). Stat and enumerate known paths instead.
+[lib/hostfs/README.md](https://github.com/unikraft/unikraft/blob/hyperlight-platform/lib/hostfs/README.md)). Stat and enumerate known paths instead.
 
 ### Running ad-hoc code (no initrd rebuild)
 
@@ -282,31 +282,34 @@ Options:
 
 ```
 hyperlight-unikraft/
-├── host/                    # Rust CLI host
-│   ├── Cargo.toml
-│   └── src/main.rs
-├── examples/
-│   ├── helloworld-c/       # C example (musl-gcc)
-│   ├── rust/               # Rust example (musl)
-│   ├── python/             # Python 3.12 example
-│   ├── go/                 # Go example (Docker + musl)
-│   └── nodejs/             # Node.js 21 example
-└── README.md
+├── host/                    # Rust host (hyperlight-unikraft CLI + pyhl)
+├── examples/                # Ready-to-use kraft configs
+│   ├── helloworld-c/       # C (musl-gcc)
+│   ├── rust/               # Rust (musl)
+│   ├── python/             # CPython 3.12
+│   ├── python-agent-driver/# Python with pre-loaded packages (pyhl)
+│   ├── go/                 # Go (musl via Docker)
+│   ├── nodejs/             # Node.js 21
+│   ├── hostfs-posix-c/     # Host filesystem sandbox (C)
+│   ├── hostfs-posix-py/    # Host filesystem sandbox (Python)
+│   ├── dotnet/             # .NET
+│   ├── powershell/         # PowerShell
+│   ├── shell/              # Shell
+│   └── ...
+├── runtimes/                # Dockerfiles for runtime images
+└── demos/                   # Demo materials
 ```
 
 ## Dependencies
 
-This project requires the following forked repositories with Hyperlight platform support:
+This project builds on the following upstream repositories:
 
-| Repository | Branch | Description |
-|------------|--------|-------------|
-| [danbugs/hyperlight](https://github.com/danbugs/hyperlight) | `hyperlight-platform` | Hyperlight with hw-interrupts feature |
-| [danbugs/unikraft](https://github.com/danbugs/unikraft) | `hyperlight-platform` | Unikraft with Hyperlight platform |
-| [danbugs/app-elfloader](https://github.com/danbugs/app-elfloader) | `hyperlight-platform` | ELF loader with PAGE_ALIGN fixes |
-| [danbugs/kraftkit](https://github.com/danbugs/kraftkit) | `hyperlight-platform` | Kraft with Hyperlight machine driver |
-
-The `kraft.yaml` files in the examples already reference the Unikraft and app-elfloader forks.
-The host's `Cargo.toml` references the Hyperlight fork.
+| Repository | Description |
+|------------|-------------|
+| [hyperlight-dev/hyperlight](https://github.com/hyperlight-dev/hyperlight) | Hyperlight VMM |
+| [unikraft/unikraft](https://github.com/unikraft/unikraft) | Unikraft core with Hyperlight platform support |
+| [unikraft/app-elfloader](https://github.com/unikraft/app-elfloader) | ELF loader application |
+| [unikraft/kraftkit](https://github.com/unikraft/kraftkit) | Kraft build tool with Hyperlight machine driver |
 
 ## Join our Community
 
@@ -315,7 +318,7 @@ Hyperlight.
 
 This project holds fortnightly community meetings to discuss the project's progress, roadmap, and any other topics of interest. The meetings are open to everyone, and we encourage you to join us.
 
-- **When**: Every other Wednesday 09:00 (PST/PDT) [Convert to your local time](https://dateful.com/convert/pst-pdt-pacific-time?t=09)
+- **When**: Alternating Wednesdays at 09:00 and 07:00 (PST/PDT) [Convert to your local time](https://dateful.com/convert/pst-pdt-pacific-time?t=09)
 - **Where**: Zoom! - Agenda and information on how to join can be found in the [Hyperlight Community Meeting Notes](https://hackmd.io/blCrncfOSEuqSbRVT9KYkg#Agenda). Please log into hackmd to edit!
 
 ## Chat with us on the CNCF Slack
@@ -324,7 +327,7 @@ The Hyperlight project Slack is hosted in the CNCF Slack #hyperlight. To join th
 
 ## More Information
 
-For more information, please refer to the [docs directory](./docs/) and the main [Hyperlight project](https://github.com/hyperlight-dev/hyperlight).
+For more information, please refer to the main [Hyperlight project](https://github.com/hyperlight-dev/hyperlight).
 
 ## Code of Conduct
 
