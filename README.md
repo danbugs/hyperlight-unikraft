@@ -1,3 +1,9 @@
+<div align="center">
+    <h1>Hyperlight</h1>
+    <img src="https://raw.githubusercontent.com/hyperlight-dev/hyperlight/refs/heads/main/docs/assets/hyperlight-logo.png" width="150px" alt="hyperlight logo"/>
+    <p><strong>Hyperlight is a lightweight Virtual Machine Manager (VMM) designed to be embedded within applications. It enables safe execution of untrusted code within <i>micro virtual machines</i> with very low latency and minimal overhead.</strong> <br> We are a <a href="https://cncf.io/">Cloud Native Computing Foundation</a> sandbox project. </p>
+</div>
+
 # hyperlight-unikraft
 
 Run [Unikraft](https://unikraft.org/) unikernels on [Hyperlight](https://github.com/hyperlight-dev/hyperlight), a lightweight Virtual Machine Manager (VMM) designed for embedded use within applications.
@@ -301,3 +307,25 @@ This project requires the following forked repositories with Hyperlight platform
 
 The `kraft.yaml` files in the examples already reference the Unikraft and app-elfloader forks.
 The host's `Cargo.toml` references the Hyperlight fork.
+
+## Join our Community
+
+Please review the [CONTRIBUTING.md](./CONTRIBUTING.md) file for more information on how to contribute to
+Hyperlight.
+
+This project holds fortnightly community meetings to discuss the project's progress, roadmap, and any other topics of interest. The meetings are open to everyone, and we encourage you to join us.
+
+- **When**: Every other Wednesday 09:00 (PST/PDT) [Convert to your local time](https://dateful.com/convert/pst-pdt-pacific-time?t=09)
+- **Where**: Zoom! - Agenda and information on how to join can be found in the [Hyperlight Community Meeting Notes](https://hackmd.io/blCrncfOSEuqSbRVT9KYkg#Agenda). Please log into hackmd to edit!
+
+## Chat with us on the CNCF Slack
+
+The Hyperlight project Slack is hosted in the CNCF Slack #hyperlight. To join the Slack, [join the CNCF Slack](https://www.cncf.io/membership-faq/#how-do-i-join-cncfs-slack), and join the #hyperlight channel.
+
+## More Information
+
+For more information, please refer to the [docs directory](./docs/) and the main [Hyperlight project](https://github.com/hyperlight-dev/hyperlight).
+
+## Code of Conduct
+
+See the [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md).
