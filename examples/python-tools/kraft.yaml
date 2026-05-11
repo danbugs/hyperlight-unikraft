@@ -3,8 +3,8 @@ specification: '0.6'
 name: python-tools-hyperlight
 
 unikraft:
-  source: https://github.com/danbugs/unikraft.git
-  version: hyperlight-platform
+  source: https://github.com/unikraft/unikraft.git
+  version: plat-hyperlight
   kconfig:
     # Platform
     CONFIG_PLAT_HYPERLIGHT: 'y'
@@ -63,8 +63,8 @@ unikraft:
 
 libraries:
   app-elfloader:
-    source: https://github.com/danbugs/app-elfloader.git
-    version: hyperlight-platform
+    source: https://github.com/unikraft/app-elfloader.git
+    version: plat-hyperlight
   libelf:
     source: https://github.com/unikraft/lib-libelf.git
     version: staging

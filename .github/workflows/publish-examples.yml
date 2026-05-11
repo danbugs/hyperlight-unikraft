@@ -106,8 +106,8 @@ jobs:
             UK_BRANCH=$(grep 'version:' kraft.yaml | head -1 | awk '{print $2}')
             mkdir -p .unikraft/apps .unikraft/libs
             rm -rf .unikraft/unikraft .unikraft/apps/elfloader
-            git clone --branch $UK_BRANCH --depth 1 https://github.com/danbugs/unikraft.git .unikraft/unikraft
-            git clone --branch $UK_BRANCH --depth 1 https://github.com/danbugs/app-elfloader.git .unikraft/apps/elfloader
+            git clone --branch $UK_BRANCH --depth 1 https://github.com/unikraft/unikraft.git .unikraft/unikraft
+            git clone --branch $UK_BRANCH --depth 1 https://github.com/unikraft/app-elfloader.git .unikraft/apps/elfloader
             git clone --branch staging --depth 1 https://github.com/unikraft/lib-libelf.git .unikraft/libs/libelf
             rm -rf .unikraft/build
             kraft-hyperlight --no-prompt build --plat hyperlight --arch x86_64
