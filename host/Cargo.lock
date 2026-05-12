@@ -566,6 +566,7 @@ dependencies = [
  "base64",
  "clap",
  "hyperlight-host",
+ "libc",
  "memmap2",
  "nix",
  "serde_json",

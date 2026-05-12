@@ -42,4 +42,5 @@ base64 = "0.22"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["fs"] }
+libc = "0.2"
 

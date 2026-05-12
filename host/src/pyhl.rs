@@ -222,7 +222,10 @@ impl Runtime {
                 snap.display()
             );
         }
-        let sandbox = if mounts.is_empty() {
+        let initrd = home.join(INITRD_FILE);
+        let sandbox = if initrd.is_file() {
+            Sandbox::from_snapshot_file_with_initrd(&snap, mounts, &initrd)?
+        } else if mounts.is_empty() {
             Sandbox::from_snapshot_file(&snap)?
         } else {
             Sandbox::from_snapshot_file_with(&snap, mounts)?

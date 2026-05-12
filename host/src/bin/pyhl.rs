@@ -373,8 +373,9 @@ fn cmd_setup(args: SetupArgs) -> Result<()> {
         mib(&dst_initrd)
     );
     eprintln!(
-        "  snapshot: {} ({} MiB)",
+        "  snapshot: {} ({} MiB on disk, {} MiB apparent)",
         dst_snapshot.display(),
+        disk_mib(&dst_snapshot),
         mib(&dst_snapshot)
     );
     Ok(())
@@ -382,6 +383,13 @@ fn cmd_setup(args: SetupArgs) -> Result<()> {
 
 fn mib(p: &Path) -> u64 {
     fs::metadata(p).map(|m| m.len() / 1024 / 1024).unwrap_or(0)
+}
+
+fn disk_mib(p: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(p)
+        .map(|m| m.blocks() * 512 / 1024 / 1024)
+        .unwrap_or_else(|_| mib(p))
 }
 
 /// Lightweight timestamp (seconds since epoch in ISO-8601-ish) so we don't
@@ -431,8 +439,12 @@ fn cmd_run(args: RunArgs) -> Result<()> {
         .map(|m| parse_mount(m))
         .collect::<Result<_>>()?;
 
+    let initrd = home.join(INITRD_FILE);
+
     let t_load = Instant::now();
-    let mut sandbox = if run_preopens.is_empty() {
+    let mut sandbox = if initrd.is_file() {
+        Sandbox::from_snapshot_file_with_initrd(&snapshot, &run_preopens, &initrd)?
+    } else if run_preopens.is_empty() {
         Sandbox::from_snapshot_file(&snapshot)?
     } else {
         Sandbox::from_snapshot_file_with(&snapshot, &run_preopens)?
