@@ -229,10 +229,10 @@ jobs:
           N=5
           pids=()
           for i in $(seq 1 $N); do
-            pyhl run -c "x = sum(range(10_000_000)); import time; time.sleep(15); print($i, x)" &
+            pyhl run -c "x = sum(range(500_000_000)); print($i, x)" &
             pids+=($!)
           done
-          sleep 5
+          sleep 8
           total_private=0; count=0
           for pid in "${pids[@]}"; do
             if [ -f /proc/$pid/smaps_rollup ]; then
@@ -382,11 +382,11 @@ jobs:
           $procs = @()
           for ($i = 1; $i -le 5; $i++) {
             $p = Start-Process -FilePath "pyhl" `
-              -ArgumentList "run -c `"x=sum(range(10_000_000)); import time; time.sleep(15); print($i, x)`"" `
+              -ArgumentList "run -c `"x=sum(range(500_000_000)); print($i, x)`"" `
               -PassThru -NoNewWindow -RedirectStandardOutput "NUL"
             $procs += $p
           }
-          Start-Sleep -Seconds 5
+          Start-Sleep -Seconds 10
           $totalPrivate = 0; $count = 0
           foreach ($proc in $procs) {
             $proc.Refresh()
