@@ -1590,7 +1590,7 @@ fn sparsify_snapshot(path: &Path) -> Result<()> {
 #[cfg(target_os = "windows")]
 fn sparsify_snapshot(path: &Path) -> Result<()> {
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{FSCTL_SET_SPARSE, FSCTL_SET_ZERO_DATA};
+    use windows_sys::Win32::System::Ioctl::{FSCTL_SET_SPARSE, FSCTL_SET_ZERO_DATA};
     use windows_sys::Win32::System::IO::DeviceIoControl;
 
     let file = std::fs::OpenOptions::new()
@@ -1598,7 +1598,7 @@ fn sparsify_snapshot(path: &Path) -> Result<()> {
         .write(true)
         .open(path)?;
     let len = file.metadata()?.len();
-    let handle = file.as_raw_handle() as isize;
+    let handle = file.as_raw_handle();
 
     // Mark file as sparse.
     let ok = unsafe {
