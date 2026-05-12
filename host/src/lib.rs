@@ -1585,7 +1585,98 @@ fn sparsify_snapshot(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Windows equivalent: mark the file sparse with FSCTL_SET_SPARSE, then
+/// punch zero ranges with FSCTL_SET_ZERO_DATA.
+#[cfg(target_os = "windows")]
+fn sparsify_snapshot(path: &Path) -> Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{FSCTL_SET_SPARSE, FSCTL_SET_ZERO_DATA};
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?;
+    let len = file.metadata()?.len();
+    let handle = file.as_raw_handle() as isize;
+
+    // Mark file as sparse.
+    let ok = unsafe {
+        DeviceIoControl(
+            handle,
+            FSCTL_SET_SPARSE,
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Ok(());
+    }
+
+    let mmap = unsafe { memmap2::Mmap::map(&file)? };
+
+    const PAGE: usize = 4096;
+    const HEADER: usize = PAGE;
+    let zero_page = [0u8; PAGE];
+
+    // Coalesce contiguous zero pages into ranges for fewer syscalls.
+    let mut punched = 0u64;
+    let mut offset = HEADER;
+    while offset + PAGE <= len as usize {
+        if mmap[offset..offset + PAGE] != zero_page {
+            offset += PAGE;
+            continue;
+        }
+        let range_start = offset;
+        while offset + PAGE <= len as usize && mmap[offset..offset + PAGE] == zero_page {
+            offset += PAGE;
+        }
+        let range_end = offset;
+
+        #[repr(C)]
+        struct FileZeroDataInformation {
+            file_offset: i64,
+            beyond_final_zero: i64,
+        }
+
+        let info = FileZeroDataInformation {
+            file_offset: range_start as i64,
+            beyond_final_zero: range_end as i64,
+        };
+        let ok = unsafe {
+            DeviceIoControl(
+                handle,
+                FSCTL_SET_ZERO_DATA,
+                &info as *const _ as *const _,
+                std::mem::size_of::<FileZeroDataInformation>() as u32,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok != 0 {
+            punched += (range_end - range_start) as u64 / PAGE as u64;
+        }
+    }
+    drop(mmap);
+
+    if punched > 0 {
+        eprintln!(
+            "  sparsified: punched {} zero pages ({} MiB saved on disk)",
+            punched,
+            punched * 4 / 1024
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn sparsify_snapshot(_path: &Path) -> Result<()> {
     Ok(())
 }

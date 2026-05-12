@@ -570,6 +570,7 @@ dependencies = [
  "memmap2",
  "nix",
  "serde_json",
+ "windows-sys",
 ]
 
 [[package]]
