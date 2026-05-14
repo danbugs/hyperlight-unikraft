@@ -30,6 +30,10 @@ run-https:
 run-echo:
     hyperlight-unikraft {{kernel}} --initrd {{initrd}} --memory {{memory}} --net -- /echo_server.py
 
+# Run HTTP server (curl http://127.0.0.1:8080/ to test)
+run-http-server:
+    hyperlight-unikraft {{kernel}} --initrd {{initrd}} --memory {{memory}} --net -- /http_server.py
+
 # Build rootfs via Docker (cross-platform)
 rootfs:
     docker build --platform linux/amd64 --target cpio -t {{image}}-cpio .
